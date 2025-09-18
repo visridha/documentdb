@@ -74,3 +74,6 @@ build/
 *.deb
 
 site/
+
+# Rust output
+target/
