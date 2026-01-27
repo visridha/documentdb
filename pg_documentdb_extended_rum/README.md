@@ -100,6 +100,20 @@ Note that the documentdb_rum index offers arbitrary numbers of operators that ca
 
 The section on query scans describes how these operator class support functions are used in various paths.
 
+## Index Builds & Inserts
+The index build and insert process follows the GIN logic pretty closely - including the integration for parallel index build. The primary difference is that documentdb_rum uses Generic_Xlog for writing out WAL (which is also elided in the case of build) One important callout is that documentdb_rum adds an option in the `config` proc such that documents that don't generate any index keys can opt to not insert any terms into the index. This is different than GIN and RUM that insert an "EMPTY" entry in this case. This helps reduce storage overhead for sparse or wildcard style indexes.
+
+Additionally, the logic from GIN around incomplete page splits was missed when RUM was ported, and documentdb_rum ports that logic over to the index to avoid "Lost path" errors during inserts.
+
+## Scans
+The documentdb_rum index supports 4 types of scans of the index:
+1) Fast Scans: These are scans that try to get fast intersections of equality keys between high cardinality and low cardinality keys by skipping TID ranges of high cardinality keys during the intersection. These require preconsistent to be implemented in the op-class and only work on equality joins.
+2) Regular Scans: These are the bread-and-butter type scans of the GIN index and are implemented pretty-close to the GIN implementation. Some of the performance improvements of skipping posting tree ranges are added which model past attempts to add these into GIN (which was based off of the Fast scan approach RUM added originally).
+3) Full Scans: These are scans that end up scanning the entire GIN/RUM index - used primarily in JSONB/Text style scans that may need to scan non-empty entries or ordering entries on the index.
+4) Ordered Scans: These are net-new and added in documentdb to support BTree style index scans against an inverted index.
+
+
+
 ## Vacuuming & Maintenance
 
 ### Original Authors
