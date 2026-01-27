@@ -44,7 +44,13 @@ for the `AddInfo`. The usage of this is discussed further below and in the origi
 Note that unlike GIN, the entry tree has Left and Right Page pointers to ensure we can walk the index forward and backward. Additionally, to support ordered and index scans, we eliminate the pending list.
 To see why this is needed see the comment [here](https://github.com/postgres/postgres/blob/master/src/backend/access/gin/ginget.c#L1956)
 
+The entry tree for documentdb_rum also allocates 2 unused bytes in the entry page header for the Vacuum Cycle Id. This is a concept that is borrowed from Btree to do disk order vacuuming for indexes. For further
+discussion, please see the section on Vacuuming.
+
 ### The Posting Tree
+
+
+## Vacuuming RUM indexes
 
 ### Original Authors
 See [README](https://github.com/postgrespro/rum/blob/master/README.md)
