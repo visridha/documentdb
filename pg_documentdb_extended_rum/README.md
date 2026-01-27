@@ -74,6 +74,23 @@ Posting Tree leaf pages have similar metadata to GIN posting tree pages, with th
 
 ## Operator class Extensibility
 
+The documentdb_rum index offers 3 types of index behaviors and the operator class extensibility is extended to handle each of these scenarios:
+1) Classic GIN style indexes - these can be the inverted index text index style indexes or jsonb operator classes that support equality, or simple range scans with TID based intersections.
+2) Extended information text indexes - These are the type of indexes that the RUM index was intended to deal with with order_by based on the full text score or relevance baked into the index
+3) Btree style inverted indexes - these support btree style indexes on json style data that can do btree style operations, as well as GIN style operations on the same data.
+
+Each type of index offers a subset of operator class support functions to emulate the behavior of the index.
+
+Note that the documentdb_rum index offers arbitrary numbers of operators that can be declared for the operator class, as well as ORDER BY operators that can be used against the op-class. The following table lists the set of support functions for the index:
+
+| Name |   Description   | Required | Number | Scenario | Notes |
+| ---------------| -------- | ---------| ------------| ------| --- |
+| compare | compare two keys and return an integer less than zero, zero, or greater than zero, indicating whether the first key is less than, equal to, or greater than the second | Yes | 1 | All | Same as GIN/RUM |
+| extractValue | 	extract 0 or more keys from a value to be indexed (can be arbitrarily many) | Yes | 2 | All | Same as GIN/RUM
+| extractQuery | extract keys from a query condition | Yes | 3 | All | Same as GIN/RUM |
+| consistent | determine whether value matches query condition (Boolean variant) (optional if support function 6 is present) | Yes | 4 | All | Same as GIN/RUM |
+| comparePartial | compare partial key from query and key from index, and return an integer less than zero, zero, or greater than zero, indicating whether the scan should ignore this index entry, treat the entry as a match, or stop the index scan | No | 5 | All | Same as GIN/RUM |	
+
 ## Vacuuming & Maintenance
 
 ### Original Authors
