@@ -112,7 +112,21 @@ The documentdb_rum index supports 4 types of scans of the index:
 3) Full Scans: These are scans that end up scanning the entire GIN/RUM index - used primarily in JSONB/Text style scans that may need to scan non-empty entries or ordering entries on the index.
 4) Ordered Scans: These are net-new and added in documentdb to support BTree style index scans against an inverted index.
 
+Note that documentdb_rum supports both bitmap scans and index scans. Characteristics for each are called out below.
 
+### Fast Scans
+Fast Scans are typically used for equality joins of `A && B` where A and B are equality predicates and is optimized for the case where A has high cardinality and B has low cardinality. This only works on an opclass that has:
+- compare
+- extractValue
+- extractQuery
+- consistent
+- preconsistent
+- (optional) canPreconsistent
+
+Fast Scans start the scan by running extractQuery against the given keys. If none of them require range scans (comparePartial), then they're eligible for fast scans if canPreconsistent doesn't exist or canPreconsistent says it's available.
+The query then traverses the entry tree to each entry's leaf entry. The query then sorts the entries by estimated number of postings (for posting trees this is calculated).
+
+The query then walks the entries in order (from lowest cardinality to highest cardinality) and intersects TIDs, binary searching the posting trees for the next available TIDs as needed. Once a TID is found that matches all predicates, it is returned to the calling indexscan/bitmap scan.
 
 ## Vacuuming & Maintenance
 
