@@ -90,6 +90,15 @@ Note that the documentdb_rum index offers arbitrary numbers of operators that ca
 | extractQuery | extract keys from a query condition | Yes | 3 | All | Same as GIN/RUM |
 | consistent | determine whether value matches query condition (Boolean variant) (optional if support function 6 is present) | Yes | 4 | All | Same as GIN/RUM |
 | comparePartial | compare partial key from query and key from index, and return an integer less than zero, zero, or greater than zero, indicating whether the scan should ignore this index entry, treat the entry as a match, or stop the index scan | No | 5 | All | Same as GIN/RUM |	
+| config | Configure the index_am behavior - for addinfo, natural sorting behavior for metadata, sparse key behavior etc. | No | 6 | 2 & 3 | Used in RUM, Extended in documentdb_rum to handle sparse index storage, etc |
+| preconsistent | Similar to the consistent function - if implemented, supports a fast intersection between a high cardinality & low cardinality term | No | 7 | All | Same as RUM |
+| ordering | Defines ordering behavior for order by distance for text-like indexes, or addinfo style indexes. On Btree style indexes, used to project the order operator result from the index key in the type of the operator's return type | No | 8 | 2 & 3 | Used in RUM for distance ordering. Used in Btree for covered index queries as well as order scan queries | Used in RUM, extended in documentdb_rum for ordering of Btree style indexes |
+| outer/inner ordering | Defines ordering behavior when an order by attach index is specified with an alternate ordering for text style indexes. For Btree style indexes, provides a way to project the index key for various internal operations needed within the index (e.g. suffix truncation, skip scans, etc where operator class cooperation is needed) | No | 9 | 2 & 3 | Present in RUM, extended in documentdb_rum to handle skip_scan queries |
+| addinfo join | | No | 10 | 2 | |
+| operator class config | Custom proc that allows operator class options to be configured | No | 11 | All | Same as GIN but with a different support number. Not supported in RUM |
+| canPreconsistent | Preconsistent assumes that all operators in the operator class support fast scans. This allows opt-in for specific operators as needed | No | 12 | All | Net new in documentdb_rum for opt-in for fast scans |
+
+The section on query scans describes how these operator class support functions are used in various paths.
 
 ## Vacuuming & Maintenance
 
