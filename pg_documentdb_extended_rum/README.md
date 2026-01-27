@@ -47,10 +47,13 @@ To see why this is needed see the comment [here](https://github.com/postgres/pos
 The entry tree for documentdb_rum also allocates 2 unused bytes in the entry page header for the Vacuum Cycle Id. This is a concept that is borrowed from Btree to do disk order vacuuming for indexes. For further
 discussion, please see the section on Vacuuming.
 
+Note that unlike Btree, documentdb_rum pages do not store the high key offset in the page. The Max offset of a given key is the highest key on that page - this will become important when dealing with scenarios like
+suffix truncation (see below).
+
 ### The Posting Tree
+When a given index entry gets too big for a Block or does not fit within a block (factoring in page splits) etc.
 
-
-## Vacuuming RUM indexes
+## Vacuuming & Maintenance
 
 ### Original Authors
 See [README](https://github.com/postgrespro/rum/blob/master/README.md)
