@@ -41,6 +41,9 @@ an additional metadata datum that can be attached to each row. Therfore a postin
 except for the last byte which is 6-bit encoded, and the 7th bit indicates whether the addInfo is null or not. If it's not null, then the posting is followed by a 1, 2, 4, or 8 byte Datum value
 for the `AddInfo`. The usage of this is discussed further below and in the original RUM index [README](https://github.com/postgrespro/rum/blob/master/README.md).
 
+The structure of the addInfo bits looks as follows: Note that the addinfo is only present when not null.
+![image](https://github.com/postgrespro/rum/raw/master/img/gin_rum.svg)
+
 Note that unlike GIN, the entry tree has Left and Right Page pointers to ensure we can walk the index forward and backward. Additionally, to support ordered and index scans, we eliminate the pending list.
 To see why this is needed see the comment [here](https://github.com/postgres/postgres/blob/master/src/backend/access/gin/ginget.c#L1956)
 
