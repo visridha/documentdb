@@ -24,6 +24,8 @@ The documentdb_rum index layout consists of 3 types of PostgreSQL pages:
 2) ENTRY Pages - These store the core index entries that are used for lookups and are laid out as a BTree. The root page for this tree is stored at Block 1.
 3) DATA Pages - These are posting trees storing bitmaps of rows matching a given entry The root of each posting tree is committed in the Entry that roots the tree.
 
+![Index structure](./documentdb_rum_index_structure.png)
+
 
 ### The Entry Tree
 
