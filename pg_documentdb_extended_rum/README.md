@@ -24,7 +24,7 @@ The documentdb_rum index layout consists of 3 types of PostgreSQL pages:
 2) ENTRY Pages - These store the core index entries that are used for lookups and are laid out as a BTree. The root page for this tree is stored at Block 1.
 3) DATA Pages - These are posting trees storing bitmaps of rows matching a given entry The root of each posting tree is committed in the Entry that roots the tree.
 
-![Index structure](./documentdb_rum_index_structure.png)
+![Index structure](./images/documentdb_rum_index_structure.png)
 
 
 ### The Entry Tree
@@ -120,7 +120,7 @@ Note that documentdb_rum supports both bitmap scans and index scans. Characteris
 Fast Scans are typically used for equality joins of `A && B` where A and B are equality predicates and is optimized for the case where A has high cardinality and B has low cardinality. This only works on an opclass that has:
 - compare
 - extractValue
-- extractQuery
+- extractQuery 
 - consistent
 - preconsistent
 - (optional) canPreconsistent
@@ -129,6 +129,16 @@ Fast Scans start the scan by running extractQuery against the given keys. If non
 The query then traverses the entry tree to each entry's leaf entry. The query then sorts the entries by estimated number of postings (for posting trees this is calculated).
 
 The query then walks the entries in order (from lowest cardinality to highest cardinality) and intersects TIDs, binary searching the posting trees for the next available TIDs as needed. Once a TID is found that matches all predicates, it is returned to the calling indexscan/bitmap scan.
+
+### Regular Scans
+Regular scans are the bread & butter of the standard GIN and RUM Text Search and Json style queries. This works using the following operator classes:
+- compare
+- extractValue
+- extractQuery
+- consistent
+- comparePartial
+
+Regular scans 
 
 ## Vacuuming & Maintenance
 
