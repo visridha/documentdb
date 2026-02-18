@@ -259,6 +259,12 @@ These files exist in public RUM that don't yet in documentdb_rum
 The following files from the public RUM repo were removed:
 - tuplesort96.c, tuplesort10-14.c, qsort_tuple.c: extended_rum only supports PG15 and higher
 
+--------------------------------------------------------------------------
+
+There's pending refactoring present in `rum.c` in pg_documentdb that needs to be ported into the extended_rum index.
+
+TODO: Document pending refactors in rum.c from pg_documentdb.
+
 
 TODO Files:
 - rumvacuum.c
