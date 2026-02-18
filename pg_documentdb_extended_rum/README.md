@@ -200,12 +200,28 @@ The following list cover the changes made over PostgresPro RUM's physical implem
 - rumtsquery.c: N/A
 
 
+The following files from the public RUM repo were removed:
+- tuplesort96.c, tuplesort10-14.c: extended_rum only supports PG15 and higher
+
+
 TODO Files:
 - rumvacuum.c
 - rumscan.c
 - ruminsert.c
 - rumget.c
 - rum.h/pg_documentdb_rum.h
+
+TODO Files only in Public RUM
+- rum_debug_funcs.c
+- rumtidbitmap.c/h
+
+Net new files TODO:
+- documentdb_rum_init.c
+- rum_debug.c
+- rum_repair.c
+- rumbuild_tuplesort.c
+- rumsharedmem_utils.c
+- rumselfuncs.c
 
 ### Original Authors
 See [README](https://github.com/postgrespro/rum/blob/master/README.md)
