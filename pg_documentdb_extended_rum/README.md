@@ -205,6 +205,7 @@ TODO Files:
 - rumscan.c
 - ruminsert.c
 - rumget.c
+- rum.h/pg_documentdb_rum.h
 
 ### Original Authors
 See [README](https://github.com/postgrespro/rum/blob/master/README.md)
