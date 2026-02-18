@@ -174,10 +174,23 @@ The following list cover the changes made over PostgresPro RUM's physical implem
     - `[TESTING]`: Add some asserts for the itemId written into a page
     - `[INCOMPLETE SPLIT]` rumPrepareEntryScan: Add support for filling RumBtreeStack for incomplete split. This is similar to the logic in GIN for incomplete split.
 - rumvalidate.c
-    - `[ORDERED SCANS]`: Add validation of the operator classes to support ordering functions and auxiliary support functions for ordered scans.
+    - `[OPCLASS]`: Add validation of the operator classes to support ordering functions and auxiliary support functions for ordered scans.
 - rumsort.c
-    - `[REFACTOR]` Strip all the includes below pg15 for the tuplesort copy
+    - `[REFACTOR]`: Strip all the includes below pg15 for the tuplesort copy
     - `[REGULARSCAN]`: Add support for minimal tuples in the tuplestore that has JUST the TID and no extra data for the collectMatchBitmap
+- rumutil.c
+    - `[REFACTOR]`: Move all the rum options and GUCs into rumconfigs.c.
+    - `[PARALLELBUILD]`: Register options in the indexamhandler for `amcanbuildparallel`. Also port `rumbuildphasename` from GIN's parallel build, and add stage names for Writing WAL a the end of the build.
+    - `[VACUUM]`: port adding amusemaintenanceworkmem, amparallelvacuumoptions to match what was set in GIN (RUM was missing this).
+    - `[OPCLASS]`: Add amoptsprocnum into the indexam handler to match what GIN does to support operator class options in Postgres.
+    - `[PARALLELSCAN]`: Register entrypoints for amestimateparallelscan, ruminitparallelscan, rumparallelrescan in the index am
+    - `[SPARSEINDEX]`: Add option for `skipGenerateEmptyEntries` to skip generating the `NULL` entry on datums that don't generate terms. Populate this from the rumConfig struct. in `rumExtractEntries`, honor that and don't generate a null term if requested.
+    - `[FASTSCAN]`: Add a support function `RUM_CAN_PRE_CONSISTENT_PROC` that allows operator classes to declare whether they support fast scans on that operator or not (RUM default assumes that all non-compare partial operators can support fast scans, but some operators can have disjunctions in the entries). Populate the RumState with it.
+
+- rumconfigs.c
+    - `[REFACTOR]` New file in extended_rum. Has all the GUCs and rum options that was previously in rumutil.c.
+    - `[REFACTOR]`: Add GUCs for all the different new settings introduced.
+
 
 - btree_rum.c: N/A
 - disable_core_macros.h: N/A
@@ -189,7 +202,6 @@ The following list cover the changes made over PostgresPro RUM's physical implem
 
 TODO Files:
 - rumvacuum.c
-- rumutil.c
 - rumscan.c
 - ruminsert.c
 - rumget.c
