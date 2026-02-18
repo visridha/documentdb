@@ -125,10 +125,10 @@ Fast Scans are typically used for equality joins of `A && B` where A and B are e
 - preconsistent
 - (optional) canPreconsistent
 
-Fast Scans start the scan by running extractQuery against the given keys. If none of them require range scans (comparePartial), then they're eligible for fast scans if canPreconsistent doesn't exist or canPreconsistent says it's available.
+Fast Scans start the scan by running extractQuery against the given keys. If none of them require range scans (partialMatch), then they're eligible for fast scans if canPreconsistent doesn't exist or canPreconsistent says it's available.
 The query then traverses the entry tree to each entry's leaf entry. The query then sorts the entries by estimated number of postings (for posting trees this is calculated).
 
-The query then walks the entries in order (from lowest cardinality to highest cardinality) and intersects TIDs, binary searching the posting trees for the next available TIDs as needed. Once a TID is found that matches all predicates, it is returned to the calling indexscan/bitmap scan.
+The query then walks the entries in order (from lowest cardinality to highest cardinality) and intersects TIDs, binary searching the posting trees for the next available TIDs as needed. Once a TID is found that matches all predicates, it is returned to the calling indexscan/bitmap scan. Note that in the case of fast scans, if the candidate TID is not found in the current page, the search will walk up to the parent page and 'search' the appropriate posting tree page - skipping irrelevant chunks of the posting tree in the process using the intermediate nodes.
 
 ### Regular Scans
 Regular scans are the bread & butter of the standard GIN and RUM Text Search and Json style queries. This works using the following operator classes:
@@ -138,9 +138,61 @@ Regular scans are the bread & butter of the standard GIN and RUM Text Search and
 - consistent
 - comparePartial
 
-Regular scans 
+TO DO.
 
 ## Vacuuming & Maintenance
+
+TO DO.
+
+### Bulk Delete
+As a refresher, at a high level vacuum for GIN/RUM indexes work as follows:
+- Vacuum walks to the left-most leaf child of the entry tree from the root. Entry leaves are then visited from left to right (in tree order).
+- For each leaf, the postings for each entry are cleaned up. Note: The empty entries are not cleaned up from the tree. While walking the entries, the posting tree roots are collected in memory.
+- Once the entry page is cleaned up, the posting trees on that page are visited. For each posting tree, it walks to th eleft most leaf and prunes postings from the posting tree.
+- After the leaves of each posting tree is cleaned up, the root posting tree is locked exclusively, and the tree is walked again, and empty posting tree pages are pruned.
+
+The downsides of this vacuum process (specifically around documentdb style indexes) are the following:
+- The tree ordered walk for bulk delete meant that for large indexes and slower disks, where buffer reading latency may be non-trivial, the vacuum performance can degrade
+
+## Deltas over the default RUM index
+
+The following list cover the changes made over PostgresPro RUM's physical implementation. The grouping is done by file/intent. Files that were left identical (outside of style changes) are marked as N/A.
+
+- rumbtree.c
+    -  `[INCOMPLETE SPLIT]` This file has deltas to support lost path errors/incomplete splits. This ported the changes that were already present in the GIN index. RUM was forked from GIN in Postgres 9.3. Over PG 9.4 to PG 15, there were many changes in the GIN index to support incomplete splits and lost path errors. rumInsertOld tracks the logic that was present in RUM. rumInsertNew ports the same logic from ginbtree.c for rumPlaceToPage, rumFinishOldSplit, and rumFinishSplit. The main delta is on the actual page contents which uses the RUM leaf page state. There was one additional refactor to remove some local fields to make them function parameters in RumBtreeStack which are not ported.
+- rumdatapage.c
+    - `[REFACTOR]` Calls to `RumPageGetOpaque(page)->maxoff` was replaced with a macro `RumDataPageMaxOff(page)` for clarity. Calls to `RumPostingItemGetBlockNumber` got renamed to `PostingItemGetBlockNumber`. Calls to `RumPageGetOpaque(page)->freespace` got replaced with a macro `RumDataPageReadFreeSpaceValue`. Calls to `RumItemPointerSetMin` got renamed to `ItemPointerSetMin`
+    - `[TESTING]` There's a test GUC for `RumDataPageIntermediateSplitSize` which forces a page split if the number of entries exceeds this test GUC to be able to test page splits on data pages. Never on in prod.
+    - `[LP_DEAD]` dataPlaceToPage/dataSplitPageLeaf/dataSplitPageInternal/rumInsertItemPointers: Adds support for `LP_DEAD` on data pages. On place to/split of a page, revive the page (set the page flags to not be dead).
+    - `[VACUUM]` dataSplitPageLeaf/dataSplitPageInternal: If the disk order vacuum is enabled, then set the vacuum cycle id on the page header from the shared memory state on a page split (borrowed logic from btree vacuum).
+    - `[PERFORMANCE]` updateItemIndexes: Improve performance of reading ItemPointers from a posting list. Use static state blocknoIncr that we use to recompute delta state. This is borrowing the idea from gin's logic to read ItemPointers from a posting list. This uses a test GUC `RumUseNewItemPtrDecoding`
+    - `[INCOMPLETE SPLIT]` rumPrepareDataScan: Add support for filling RumBtreeStack for incomplete split. This is similar to the logic in GIN for incomplete split - but the WAL logic is ported to generic xlog.
+- rumentrypage.c
+    - `[PERFORMANCE]` rumReadTuple: Apply the faster reads of ItemPointers under `RumUseNewItemPtrDecoding`
+    - `[VACUUM]`: entryIsMoveRight: skip half dead pages when traversing the tree. Similar to btree.
+    - `[VACUUM]`: entrySplitPage: If the disk order vacuum is enabled, then set the vacuum cycle id on the page header from the shared memory state on a page split (borrowed logic from btree vacuum).
+    - `[TESTING]`: Add some asserts for the itemId written into a page
+    - `[INCOMPLETE SPLIT]` rumPrepareEntryScan: Add support for filling RumBtreeStack for incomplete split. This is similar to the logic in GIN for incomplete split.
+- rumvalidate.c
+    - `[ORDERED SCANS]`: Add validation of the operator classes to support ordering functions and auxiliary support functions for ordered scans.
+- rumsort.c
+    - `[REFACTOR]` Strip all the includes below pg15 for the tuplesort copy
+    - `[REGULARSCAN]`: Add support for minimal tuples in the tuplestore that has JUST the TID and no extra data for the collectMatchBitmap
+
+- btree_rum.c: N/A
+- disable_core_macros.h: N/A
+- qsort_tuple.c: N/A
+- rum_arr_utils.c: N/A
+- rumbulk.c: N/A
+- rumtsquery.c: N/A
+
+
+TODO Files:
+- rumvacuum.c
+- rumutil.c
+- rumscan.c
+- ruminsert.c
+- rumget.c
 
 ### Original Authors
 See [README](https://github.com/postgrespro/rum/blob/master/README.md)
