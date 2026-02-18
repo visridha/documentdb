@@ -238,12 +238,13 @@ New files added to documentdb_rum
     - `[PERFORMANCE]` port decode_varbyte_blocknumber, rumDataPageLeafReadItemPointerWithBlockNumberIncr, rumPopulateDataPage etc. mirroring some of the performance improvements in GIN reading TIDs in a posting list (but accounting for addinfo for RUM). This is under RumUseNewItemPtrDecoding
     - `[PARALLEL BUILD]` Port PROGRESS_RUM_PHASE_MERGE_* introducing the parallel build stages from Gin for PG18.
 
-
+- ruminsert.c
+    - `[PARALLEL BUILD]` Copy of gininsert.c's changes for parallel build. Note that the RumTuple mirrors that of GinTuple and the tuplesort logic is copied as-is. Consequently, we can't support parallel build if any add-info or attach columns are set in the RUM index- which falls back to serial build of the index (this is net new to disable parallel build behavior on invalid configurations.). We added updates for the progress reporting to include building WAL etc since the original stage had some period of non-reporting during that interval for large indexes. Everything post rumbuild_serial is copied from GIN. rumbuild_serial represents the older index build that existed in RUM.
+    - `[PERFORMANCE]` in RumHeapTupleInsert allow for cancellation in between inserts of terms if ExtractEntries returns multiple entries.
 
 These files are retained as-is from RUM:
 - btree_rum.c: N/A
-- disable_core_macros.h: N/A
-- qsort_tuple.c: N/A
+- disable_core_macros.h: N/A 
 - rum_arr_utils.c: N/A
 - rumbulk.c: N/A
 - rumtsquery.c: N/A
@@ -256,13 +257,12 @@ These files exist in public RUM that don't yet in documentdb_rum
     - `[BUGFIX|ADDINFO]` *TODO* This was a bugfix that went in some time in 2025 that needs to be ported into documentdb_rum as well to handle a case of incorrect query results with addinfo.
 
 The following files from the public RUM repo were removed:
-- tuplesort96.c, tuplesort10-14.c: extended_rum only supports PG15 and higher
+- tuplesort96.c, tuplesort10-14.c, qsort_tuple.c: extended_rum only supports PG15 and higher
 
 
 TODO Files:
 - rumvacuum.c
 - rumscan.c
-- ruminsert.c
 - rumget.c
 
 
