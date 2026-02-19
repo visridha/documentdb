@@ -240,6 +240,16 @@ The following list cover the changes made over PostgresPro RUM's physical implem
     - `[PARALLEL SCAN]`: Implement `ruminitparallelscan`, `rumparallelrescan`, `rum_parallel_scan_start`, `rum_parallel_seize`, `rum_parallel_release` and `rum_parallel_scan_start_notify` which borrow from the btree equivalent functions with similar names
     - `[DIAGNOSTICS]` Add top level function that can explain the details of the scan of a documentdb_rum index for extended explain.
 
+- rumget.c
+    - `[REGULARSCAN][PERFORMANCE]` Add support for a 2 phase regular scan: Allow the first phase to initialize equality (non partial match bounds). Then pass those lower bounds to the partialMatch scans so that we can collect fewer TIDs as we walk the tree and have fewer lossy bitmaps.
+    - `[REGULARSCAN][PERFORMANCE]` Reduce the size of hte tuplestore/sort needed for RUM items if there's no orderby-attach scenario. use `isMatchMinimalTuple` which only stores the TID in the tuplestore.
+    - `[LPDEAD]` During the partial match scan, skip entries that have LP_DEAD set on them. Support skipping data pages that only contain LP_DEAD items in regular and ordered scans in posting trees.
+    - `[RELIABILITY]` - fix crashes around `useAlternativeOrder`, `entryGetNextItem` and `entryFindItem` where post-page split, there can be a crash.
+    - `[ORDERING]` Support ordered index scan walk from `rumgettuple` where we walk the tree in term order top down, visiting any posting trees along the way. Leverage the operator class extensibility to handle this. `LPDEAD` and page splits are handled in a similar fashion to btree with one exception - on a leftward walk, when there's a split, btree walks back 4 times and bails. We continue to walk back until the original page is reached. `INDEXONLYSCAN` projections happen per index tuple. `MoveBuffersForOrderedScan` covers the walk that mirrors btree behavior.
+    - `[LPDEAD]` For ordered walks, at the end of a page, ensure that we mark tuples as LP_DEAD if all the tids of a given tuple are dead before skipping to the next page and set the page dirty hint.
+    - `[SKIPSCAN]` Implement skipscan support into the order by walks.
+    - `[PARALLEL SCAN]` Implement parallel scan walks on top of ordered scan walks. This borrows heavily from btree's parallel scan which does a single threaded `seize` and page walk, and then has each worker traverse each page separately. Backward walks are not yet supported due to the difference in behavior of ordered scans above on page splits. `MoveBuffersForOrderedScanParallel` mirrors the btree parallel walk logic.
+
 New files added to documentdb_rum
 - rumconfigs.c: Configurations for the RUM index.
     - `[REFACTOR]` New file in extended_rum. Has all the GUCs and rum options that was previously in rumutil.c.
@@ -291,9 +301,6 @@ There's pending refactoring present in `rum.c` in pg_documentdb that needs to be
 - Explain changes for the operator class is in `rum.c`. In reality, this should move out to another file since it is more about the operator class and less about the indexam.
 
 --------------------------------------------------------------------------
-
-TODO Files:
-- rumget.c
 
 
 ### Original Authors
