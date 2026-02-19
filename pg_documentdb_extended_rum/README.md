@@ -242,6 +242,21 @@ New files added to documentdb_rum
     - `[PARALLEL BUILD]` Copy of gininsert.c's changes for parallel build. Note that the RumTuple mirrors that of GinTuple and the tuplesort logic is copied as-is. Consequently, we can't support parallel build if any add-info or attach columns are set in the RUM index- which falls back to serial build of the index (this is net new to disable parallel build behavior on invalid configurations.). We added updates for the progress reporting to include building WAL etc since the original stage had some period of non-reporting during that interval for large indexes. Everything post rumbuild_serial is copied from GIN. rumbuild_serial represents the older index build that existed in RUM.
     - `[PERFORMANCE]` in RumHeapTupleInsert allow for cancellation in between inserts of terms if ExtractEntries returns multiple entries.
 
+- rumvacuum.c
+    - `[DIAGNOSTICS]` Added RumVacuumStatistics which tracks data that happens when vacuuming that can be logged.
+    - `[VACUUM][PERFORMANCE]` Update RumVacuumState to add disk order vacuum - the additional fields of the struct borrow from btvacuum state.
+    - `[VACUUM][PERFORMANCE]` rewrite rumVacuumPostingTreeLeaves to rumVacuumPostingTreeLeavesNew. Similarly rewrite rumVacuumPostingTree to rumVacuumPostingTreeNew. This follows the logic and updates in ginvacuum.c to reduce lock contention in posting tree pruning. Instead of locking the entire posting tree while vacuuming it, it first walks to the left-most leaf of the posting tree and walks left-to-right to delete TIDs in the posting tree. It still locks the root posting tree when pruning empty pages (similar to GIN). rumScanToDelete is also updated to be a copy of ginScanToDelete. Note: This fix was made to GIN after RUM forked and was missing in RUM.
+    - `[VACUUM][PERFORMANCE]` Allow skipping marking pages as deleted if we can't safely obtain locks on the left/right/parent. This ensures that we don't stall waiting for LWLocks for too long. The next vacuum can retry in pruning the empty page and freeing up space (net new).
+    - `[VACUUM][CLEANUP]` Start pruning empty entries within a leaf page in RUM. Note that RUM and GIN do not prune the entry tree at all. the entry tree will forever grow until a reindex. This updates `rumCleanupEmptyEntries` called on each leaf entry page to prune entries that don't have TIDs associated with them. Note that similar to Btree, to preserve the lehman-yao property, we preserve (do not delete) the high key of a page (the right most key) even if it's empty. then implement `CheckAndPruneEmptyRumPage` which validates that a page (including its right most entry) is fully empty, and deletes the page from the parent intermediate node. This follows btree's page deletion logic. The right most child of the intermediate page is not deleted.
+    - `[VACUUM][REFACTOR]` rumVacuumSingleEntryPage - refactor logic for vacuuming single leaf page.
+    - `[VACUUM]` Introduce rumbulkdeleteNew which does disk order vacuum copying btree vacuuming. The core bulkdelete new copies all the logic that is from btvacuum - does the disk order walk with the backtracks etc. For data pages, there's a separate track to handle disk order walk for data pages. For entry pages the logic is identical to btree. the behavior *within* an entry page mirrors rumVacuumSingleEntryPage which has rumbulkdeleteold.
+    - `[VACUUM]` in rumvacuumcleanup for page cleanup, ensure we track GlobalVisCheckRemovableXid before removing a page. This is done in GIN but not done in RUM.
+    - `[DIAGNOSTICS]`: add pgstat_progress_update_param for vacuum progress.
+    - `[VACUUM]` for disk order vacuum, do the rumScanToDelete logic for page pruning for data pages (if we're not doing inline disk walk for data pages and only for entry pages).
+    - `[VACUUM]` Try doing posting tree deletes without locking the posting tree root for the entire traversal. Instead walk the leaves left to right, and if a page is empty, then lock the root, delete the chain, and then resume. This minimizes the period where a posting tree root needs to be locked. (this is net new and borrowed from the entry tree deletion in btree.)
+    - `[VACUUM]` TODO Porting: Embed the posting tree root into the data pages so that we can prune the vacuum trees inline for disk order vacuuming.
+
+
 These files are retained as-is from RUM:
 - btree_rum.c: N/A
 - disable_core_macros.h: N/A 
@@ -259,15 +274,14 @@ These files exist in public RUM that don't yet in documentdb_rum
 The following files from the public RUM repo were removed:
 - tuplesort96.c, tuplesort10-14.c, qsort_tuple.c: extended_rum only supports PG15 and higher
 
---------------------------------------------------------------------------
-
 There's pending refactoring present in `rum.c` in pg_documentdb that needs to be ported into the extended_rum index.
 
-TODO: Document pending refactors in rum.c from pg_documentdb.
+- rumbeginscan/endscan/rescan is overridden in rum.c so that the ordering status, multi-key index status, as well as being able to merge all query keys to generate index keys before calling the index is done. This is technically just supposed to be a single support function on the operator class, but this is a refactor that is pending.
+- Explain changes for the operator class is in `rum.c`. In reality, this should move out to another file since it is more about the operator class and less about the indexam.
 
+--------------------------------------------------------------------------
 
 TODO Files:
-- rumvacuum.c
 - rumscan.c
 - rumget.c
 
