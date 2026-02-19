@@ -178,6 +178,7 @@ The following list cover the changes made over PostgresPro RUM's physical implem
 - rumsort.c
     - `[REFACTOR]`: Strip all the includes below pg15 for the tuplesort copy
     - `[REGULARSCAN][PERFORMANCE]`: Add support for minimal tuples in the tuplestore that has JUST the TID and no extra data for the collectMatchBitmap
+
 - rumutil.c
     - `[REFACTOR]`: Move all the rum options and GUCs into rumconfigs.c.
     - `[PARALLEL BUILD]`: Register options in the indexamhandler for `amcanbuildparallel`. Also port `rumbuildphasename` from GIN's parallel build, and add stage names for Writing WAL a the end of the build.
@@ -186,33 +187,6 @@ The following list cover the changes made over PostgresPro RUM's physical implem
     - `[PARALLELSCAN]`: Register entrypoints for amestimateparallelscan, ruminitparallelscan, rumparallelrescan in the index am
     - `[SPARSEINDEX]`: Add option for `skipGenerateEmptyEntries` to skip generating the `NULL` entry on datums that don't generate terms. Populate this from the rumConfig struct. in `rumExtractEntries`, honor that and don't generate a null term if requested.
     - `[FASTSCAN]`: Add a support function `RUM_CAN_PRE_CONSISTENT_PROC` that allows operator classes to declare whether they support fast scans on that operator or not (RUM default assumes that all non-compare partial operators can support fast scans, but some operators can have disjunctions in the entries). Populate the RumState with it.
-
-New files added to documentdb_rum
-- rumconfigs.c: Configurations for the RUM index.
-    - `[REFACTOR]` New file in extended_rum. Has all the GUCs and rum options that was previously in rumutil.c.
-    - `[REFACTOR]`: Add GUCs for all the different new settings introduced.
-
-- documentdb_rum_init.c
-    - `[REFACTOR]` Moved `PG_Init` logic here from rumutil.c. Also becomes the place for shared_preload_libraries initialization to ensure that the shared memory needed for Vacuum is initialized here.
-    - `[REFACTOR]` Moved logic to extract logic to check and update for multi-key status on an index that's reused across different layers. *TODO*: Move this to a better named file.
-
-- rum_debug.c: Functions to debug the index
-    - `[DIAGNOSTICS]` These have low-level debug functions that allow inspecting entry/data pages in the RUM index.
-
-- rum_repair.c: Operator functions to repair RUM indexes
-    - `[VACUUM]`: Traverses the index and walks to inspect entries that are empty and not pruned. Optionally, prunes and writes to the WAL the empty entries.
-    - `[INCOMPLETE SPLIT]`: Traverses the index, walks the leaf pages and checks for an incomplete split - logs any pages that have incomplete splits. Optionally, sets the `INCOMPLETE_SPLIT` flag on the page and marks the page dirty so that the next insert on the tree would repair the incomplete split.
-    - `[LP_DEAD]`: Revives all index entry and data pages by unsetting LP_DEAD on them. Marks the buffers as dirty in the process.
-
-- rumbuild_tuplesort.c: 
-    - `[PARALLEL BUILD]` Copy of code that sits in Postgres's gininsert tuplesort logic for parallel index build. Copied from GIN logic, across multiple PG versions with appropriate PG VERSION macros guarding each version. This is not supported for PG15.
-
-- rumsharedmem_utils.c
-    - `[VACUUM]`: Manages vacuum shared memory state for disk order vacuuming. This logic is copied from btree's vacuuming logic to determine the vacuum cycle id and cache it in shared memory state.
-    - `[PARALLEL SCAN]` Manages per query shared memory state for parallel scans. Copied from btree handling of shared memory state on a per query basis on the leader.
-
-- rumselfuncs.c
-    - `[PLANNING]`: RUM uses gincostestimate for cost selectivity. That uses ginGetStats which interprets the meta page assuming it's GIN. However, RUM has a different metapage structure so this implements rumcostestimate that allows to get the stats correctly. This also will be used to extend selectivity to do btree style selectivity if the operator class requires rather than GIN intersection style selectivity.
 
 - rum.h/pg_documentdb_rum.h
     - `[REFACTOR]` Introduce macros for `PGDLLEXPORT` since documentdb_rum defaults to internal visibility of exports
@@ -256,6 +230,43 @@ New files added to documentdb_rum
     - `[VACUUM]` Try doing posting tree deletes without locking the posting tree root for the entire traversal. Instead walk the leaves left to right, and if a page is empty, then lock the root, delete the chain, and then resume. This minimizes the period where a posting tree root needs to be locked. (this is net new and borrowed from the entry tree deletion in btree.)
     - `[VACUUM]` TODO Porting: Embed the posting tree root into the data pages so that we can prune the vacuum trees inline for disk order vacuuming.
 
+- rumscan.c
+    - `[PARALLEL SCAN]`: setup RumParallelScanState/RumParallelScanDescData as a struct for storing state about parallel scans (borrowed from btree).
+    - `[PERFORMANCE][OOM]` Allocate initRumState in a dedicated memory context to free it up on endscan explicitly. This was important for OOMs around exclusion constraint checks.
+    - `[ORDERING]` Allow order operators in beginscan if the operator class supports the ordering function
+    - `[SPARSEINDEX]` Disallow `GIN_SEARCH_MODE_INCLUDE_EMPTY` scans if the opclass requested no empty entries being indexed.
+    - `[ORDERING][INDEXONLYSCAN][SKIPSCAN]` If we need ordered walks, set the scan type before initializing the scan keys.
+    - `[INDEXONLYSCAN]` Support xs_want_itup if the operator class supports projection from the index. In this case, set up the scan state to reflect projection of tuples.
+    - `[PARALLEL SCAN]`: Implement `ruminitparallelscan`, `rumparallelrescan`, `rum_parallel_scan_start`, `rum_parallel_seize`, `rum_parallel_release` and `rum_parallel_scan_start_notify` which borrow from the btree equivalent functions with similar names
+    - `[DIAGNOSTICS]` Add top level function that can explain the details of the scan of a documentdb_rum index for extended explain.
+
+New files added to documentdb_rum
+- rumconfigs.c: Configurations for the RUM index.
+    - `[REFACTOR]` New file in extended_rum. Has all the GUCs and rum options that was previously in rumutil.c.
+    - `[REFACTOR]`: Add GUCs for all the different new settings introduced.
+
+- documentdb_rum_init.c
+    - `[REFACTOR]` Moved `PG_Init` logic here from rumutil.c. Also becomes the place for shared_preload_libraries initialization to ensure that the shared memory needed for Vacuum is initialized here.
+    - `[REFACTOR]` Moved logic to extract logic to check and update for multi-key status on an index that's reused across different layers. *TODO*: Move this to a better named file.
+
+- rum_debug.c: Functions to debug the index
+    - `[DIAGNOSTICS]` These have low-level debug functions that allow inspecting entry/data pages in the RUM index.
+
+- rum_repair.c: Operator functions to repair RUM indexes
+    - `[VACUUM]`: Traverses the index and walks to inspect entries that are empty and not pruned. Optionally, prunes and writes to the WAL the empty entries.
+    - `[INCOMPLETE SPLIT]`: Traverses the index, walks the leaf pages and checks for an incomplete split - logs any pages that have incomplete splits. Optionally, sets the `INCOMPLETE_SPLIT` flag on the page and marks the page dirty so that the next insert on the tree would repair the incomplete split.
+    - `[LP_DEAD]`: Revives all index entry and data pages by unsetting LP_DEAD on them. Marks the buffers as dirty in the process.
+
+- rumbuild_tuplesort.c: 
+    - `[PARALLEL BUILD]` Copy of code that sits in Postgres's gininsert tuplesort logic for parallel index build. Copied from GIN logic, across multiple PG versions with appropriate PG VERSION macros guarding each version. This is not supported for PG15.
+
+- rumsharedmem_utils.c
+    - `[VACUUM]`: Manages vacuum shared memory state for disk order vacuuming. This logic is copied from btree's vacuuming logic to determine the vacuum cycle id and cache it in shared memory state.
+    - `[PARALLEL SCAN]` Manages per query shared memory state for parallel scans. Copied from btree handling of shared memory state on a per query basis on the leader.
+
+- rumselfuncs.c
+    - `[PLANNING]`: RUM uses gincostestimate for cost selectivity. That uses ginGetStats which interprets the meta page assuming it's GIN. However, RUM has a different metapage structure so this implements rumcostestimate that allows to get the stats correctly. This also will be used to extend selectivity to do btree style selectivity if the operator class requires rather than GIN intersection style selectivity.
+
 
 These files are retained as-is from RUM:
 - btree_rum.c: N/A
@@ -282,7 +293,6 @@ There's pending refactoring present in `rum.c` in pg_documentdb that needs to be
 --------------------------------------------------------------------------
 
 TODO Files:
-- rumscan.c
 - rumget.c
 
 
