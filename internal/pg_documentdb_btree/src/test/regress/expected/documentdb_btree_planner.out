@@ -1,0 +1,378 @@
+SET documentdb.next_collection_id TO 91000300;
+SET documentdb.next_collection_index_id TO 91000300;
+SET documentdb_core.bsonUseEJson TO on;
+SET documentdb.alternate_index_handler_name = 'btree';
+SET client_min_messages = warning;
+\set VERBOSITY terse
+DO $$
+BEGIN
+    PERFORM documentdb_api_internal.create_indexes_non_concurrently(
+        'btree_planner_db',
+        $cmd${"createIndexes":"choices","indexes":[
+            {"key":{"a":1},"name":"a_1"},
+            {"key":{"b":1},"name":"b_1"},
+            {"key":{"c":1},"name":"c_1"},
+            {"key":{"a":1,"b":1},"name":"a_b"}
+        ]}$cmd$);
+    PERFORM documentdb_api.insert_one(
+        'btree_planner_db', 'choices',
+        format('{"_id":%s,"a":%s,"b":%s,"c":%s,"padding":"%s"}',
+               i, i % 10, i, (i / 10) % 10, repeat('x', 300))::documentdb_core.bson)
+    FROM generate_series(1, 1000) AS inputs(i);
+END;
+$$;
+SELECT 'documentdb_data.documents_' || collection_id AS table_name
+FROM documentdb_api_catalog.collections
+WHERE database_name = 'btree_planner_db' AND collection_name = 'choices'
+\gset
+\d :table_name
+               Table "documentdb_data.documents_91000301"
+     Column      |         Type         | Collation | Nullable | Default 
+-----------------+----------------------+-----------+----------+---------
+ shard_key_value | bigint               |           | not null | 
+ object_id       | documentdb_core.bson |           | not null | 
+ document        | documentdb_core.bson |           | not null | 
+Indexes:
+    "collection_pk_91000301" PRIMARY KEY, btree (shard_key_value, object_id)
+    "documents_rum_index_91000302" btree (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) documentdb_btree_catalog.bson_btree_single_path_ops)
+    "documents_rum_index_91000303" btree (documentdb_btree_catalog.bson_btree_extract_path(document, 'b'::text, NULL::text) documentdb_btree_catalog.bson_btree_single_path_ops)
+    "documents_rum_index_91000304" btree (documentdb_btree_catalog.bson_btree_extract_path(document, 'c'::text, NULL::text) documentdb_btree_catalog.bson_btree_single_path_ops)
+    "documents_rum_index_91000305" btree (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) documentdb_btree_catalog.bson_btree_single_path_ops, documentdb_btree_catalog.bson_btree_extract_path(document, 'b'::text, NULL::text) documentdb_btree_catalog.bson_btree_single_path_ops)
+Check constraints:
+    "shard_key_value_check" CHECK (shard_key_value = '91000301'::bigint)
+
+ANALYZE :table_name;
+SELECT index_relation.relname, stats.staattnum, stats.stadistinct
+FROM pg_index AS indexes
+JOIN pg_class AS index_relation ON index_relation.oid = indexes.indexrelid
+JOIN pg_statistic AS stats ON stats.starelid = indexes.indexrelid
+WHERE indexes.indrelid = :'table_name'::regclass
+ORDER BY index_relation.relname, stats.staattnum;
+ relname | staattnum | stadistinct 
+---------+-----------+-------------
+(0 rows)
+
+-- Different predicates must match different indexes, without hints.
+SET enable_seqscan = off;
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"a":3}}');
+                                                                                                                                              QUERY PLAN                                                                                                                                              
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=100 loops=1)
+   namespaceName: btree_planner_db.choices
+   indexName: a_1
+   a_1: (indexKey='BSONHEX0c0000001061000100000000', startup cost=0.275, total cost=4.350, selectivity=0.01, correlation=0.000, estimated index pages loaded=12.50%, estimated total index entries=1000, boundary selectivity=0.01, num boundaries=0, estimated data pages loaded=0.00%)
+   a_b: (indexKey='BSONHEX13000000106100010000001062000100000000', startup cost=0.275, total cost=4.350, selectivity=0.01, correlation=0.000, estimated index pages loaded=9.09%, estimated total index entries=1000, boundary selectivity=0.01, num boundaries=0, estimated data pages loaded=0.00%)
+   _id_: (indexKey='{"_id": 1}', startup cost=0.275, total cost=35.775, selectivity=1, correlation=0.750, estimated index pages loaded=100.00%, estimated total index entries=1000, boundary selectivity=1, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Bitmap Heap Scan on documents_91000301 collection (actual rows=100 loops=1)
+         Filter: (document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "3" } }'::documentdb_core.bson)
+         Heap Blocks: exact=50
+         ->  Bitmap Index Scan on a_1 (actual rows=100 loops=1)
+               Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "3" } }'::documentdb_core.bson)
+(11 rows)
+
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"b":493}}');
+                                                                                                                                               QUERY PLAN                                                                                                                                                
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1 loops=1)
+   namespaceName: btree_planner_db.choices
+   indexName: b_1
+   b_1: (indexKey='BSONHEX0c0000001062000100000000', startup cost=0.275, total cost=4.350, selectivity=0.01, correlation=0.000, estimated index pages loaded=16.67%, estimated total index entries=1000, boundary selectivity=0.01, num boundaries=0, estimated data pages loaded=0.00%)
+   _id_: (indexKey='{"_id": 1}', startup cost=0.275, total cost=35.775, selectivity=1, correlation=0.750, estimated index pages loaded=100.00%, estimated total index entries=1000, boundary selectivity=1, num boundaries=0, estimated data pages loaded=0.00%)
+   a_b: (indexKey='BSONHEX13000000106100010000001062000100000000', startup cost=0.275, total cost=51.775, selectivity=0.01, correlation=0.000, estimated index pages loaded=100.00%, estimated total index entries=1000, boundary selectivity=0.01, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Bitmap Heap Scan on documents_91000301 collection (actual rows=1 loops=1)
+         Filter: (document OPERATOR(documentdb_api_catalog.@=) '{ "b" : { "$numberInt" : "493" } }'::documentdb_core.bson)
+         Heap Blocks: exact=1
+         ->  Bitmap Index Scan on b_1 (actual rows=1 loops=1)
+               Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'b'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "493" } }'::documentdb_core.bson)
+(11 rows)
+
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"c":4}}');
+                                                                                                                                       QUERY PLAN                                                                                                                                        
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=100 loops=1)
+   namespaceName: btree_planner_db.choices
+   indexName: c_1
+   c_1: (indexKey='BSONHEX0c0000001063000100000000', startup cost=0.275, total cost=4.350, selectivity=0.01, correlation=0.000, estimated index pages loaded=12.50%, estimated total index entries=1000, boundary selectivity=0.01, num boundaries=0, estimated data pages loaded=0.00%)
+   _id_: (indexKey='{"_id": 1}', startup cost=0.275, total cost=35.775, selectivity=1, correlation=0.750, estimated index pages loaded=100.00%, estimated total index entries=1000, boundary selectivity=1, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Bitmap Heap Scan on documents_91000301 collection (actual rows=100 loops=1)
+         Filter: (document OPERATOR(documentdb_api_catalog.@=) '{ "c" : { "$numberInt" : "4" } }'::documentdb_core.bson)
+         Heap Blocks: exact=20
+         ->  Bitmap Index Scan on c_1 (actual rows=100 loops=1)
+               Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'c'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "4" } }'::documentdb_core.bson)
+(10 rows)
+
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"a":3,"b":493}}');
+                                                                                                                                                                                  QUERY PLAN                                                                                                                                                                                   
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1 loops=1)
+   namespaceName: btree_planner_db.choices
+   indexName: a_b
+   a_b: (indexKey='BSONHEX13000000106100010000001062000100000000', startup cost=0.275, total cost=4.285, selectivity=0.0001, correlation=0.000, estimated index pages loaded=9.09%, estimated total index entries=1000, boundary selectivity=0.0001, num boundaries=0, estimated data pages loaded=0.00%)
+   b_1: (indexKey='BSONHEX0c0000001062000100000000', startup cost=0.275, total cost=4.350, selectivity=0.01, correlation=0.000, estimated index pages loaded=16.67%, estimated total index entries=1000, boundary selectivity=0.01, num boundaries=0, estimated data pages loaded=0.00%)
+   a_1: (indexKey='BSONHEX0c0000001061000100000000', startup cost=0.275, total cost=4.350, selectivity=0.01, correlation=0.000, estimated index pages loaded=12.50%, estimated total index entries=1000, boundary selectivity=0.01, num boundaries=0, estimated data pages loaded=0.00%)
+   _id_: (indexKey='{"_id": 1}', startup cost=0.275, total cost=35.775, selectivity=1, correlation=0.750, estimated index pages loaded=100.00%, estimated total index entries=1000, boundary selectivity=1, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Index Scan using a_b on documents_91000301 collection (actual rows=1 loops=1)
+         Index Cond: ((documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "3" } }'::documentdb_core.bson) AND (documentdb_btree_catalog.bson_btree_extract_path(document, 'b'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "493" } }'::documentdb_core.bson))
+         Filter: ((document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "3" } }'::documentdb_core.bson) AND (document OPERATOR(documentdb_api_catalog.@=) '{ "b" : { "$numberInt" : "493" } }'::documentdb_core.bson))
+(10 rows)
+
+-- Omitting the redundant shard-key filter does not enable BSON statistics.
+SET documentdb.enableAddShardKeyOnlyOnPrimaryKeyFilters = on;
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"a":3}}');
+                                                                                                                                              QUERY PLAN                                                                                                                                              
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=100 loops=1)
+   namespaceName: btree_planner_db.choices
+   indexName: a_1
+   a_1: (indexKey='BSONHEX0c0000001061000100000000', startup cost=0.275, total cost=4.350, selectivity=0.01, correlation=0.000, estimated index pages loaded=12.50%, estimated total index entries=1000, boundary selectivity=0.01, num boundaries=0, estimated data pages loaded=0.00%)
+   a_b: (indexKey='BSONHEX13000000106100010000001062000100000000', startup cost=0.275, total cost=4.350, selectivity=0.01, correlation=0.000, estimated index pages loaded=9.09%, estimated total index entries=1000, boundary selectivity=0.01, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Bitmap Heap Scan on documents_91000301 collection (actual rows=100 loops=1)
+         Filter: (document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "3" } }'::documentdb_core.bson)
+         Heap Blocks: exact=50
+         ->  Bitmap Index Scan on a_1 (actual rows=100 loops=1)
+               Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "3" } }'::documentdb_core.bson)
+(10 rows)
+
+-- The selectivity flag alone cannot use expression statistics disabled at creation.
+SET documentdb_core.enableBsonSelectivityFromBtreeStats = on;
+EXPLAIN (ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"a":3}}');
+                                                                                                                                               QUERY PLAN                                                                                                                                               
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan)  (cost=4.44..19.76 rows=500 width=353) (actual rows=100 loops=1)
+   namespaceName: btree_planner_db.choices
+   indexName: a_1
+   a_1: (indexKey='BSONHEX0c0000001061000100000000', startup cost=0.275, total cost=4.312, selectivity=0.005, correlation=0.000, estimated index pages loaded=12.50%, estimated total index entries=1000, boundary selectivity=0.005, num boundaries=0, estimated data pages loaded=0.00%)
+   a_b: (indexKey='BSONHEX13000000106100010000001062000100000000', startup cost=0.275, total cost=4.312, selectivity=0.005, correlation=0.000, estimated index pages loaded=9.09%, estimated total index entries=1000, boundary selectivity=0.005, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Bitmap Heap Scan on documents_91000301 collection  (cost=4.44..19.76 rows=500 width=353) (actual rows=100 loops=1)
+         Filter: (document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "3" } }'::documentdb_core.bson)
+         Heap Blocks: exact=50
+         ->  Bitmap Index Scan on a_1  (cost=0.00..4.31 rows=5 width=0) (actual rows=100 loops=1)
+               Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "3" } }'::documentdb_core.bson)
+(10 rows)
+
+EXPLAIN (ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"b":493}}');
+                                                                                                                                                QUERY PLAN                                                                                                                                                 
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan)  (cost=4.44..19.76 rows=500 width=353) (actual rows=1 loops=1)
+   namespaceName: btree_planner_db.choices
+   indexName: b_1
+   b_1: (indexKey='BSONHEX0c0000001062000100000000', startup cost=0.275, total cost=4.312, selectivity=0.005, correlation=0.000, estimated index pages loaded=16.67%, estimated total index entries=1000, boundary selectivity=0.005, num boundaries=0, estimated data pages loaded=0.00%)
+   a_b: (indexKey='BSONHEX13000000106100010000001062000100000000', startup cost=0.275, total cost=51.775, selectivity=0.005, correlation=0.000, estimated index pages loaded=100.00%, estimated total index entries=1000, boundary selectivity=0.005, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Bitmap Heap Scan on documents_91000301 collection  (cost=4.44..19.76 rows=500 width=353) (actual rows=1 loops=1)
+         Filter: (document OPERATOR(documentdb_api_catalog.@=) '{ "b" : { "$numberInt" : "493" } }'::documentdb_core.bson)
+         Heap Blocks: exact=1
+         ->  Bitmap Index Scan on b_1  (cost=0.00..4.31 rows=5 width=0) (actual rows=1 loops=1)
+               Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'b'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "493" } }'::documentdb_core.bson)
+(10 rows)
+
+-- Restore expression statistics targets and compare common and rare values.
+ALTER INDEX documentdb_data.documents_rum_index_91000302 ALTER COLUMN 1 SET STATISTICS -1;
+ALTER INDEX documentdb_data.documents_rum_index_91000303 ALTER COLUMN 1 SET STATISTICS -1;
+ALTER INDEX documentdb_data.documents_rum_index_91000304 ALTER COLUMN 1 SET STATISTICS -1;
+ALTER INDEX documentdb_data.documents_rum_index_91000305 ALTER COLUMN 1 SET STATISTICS -1;
+ALTER INDEX documentdb_data.documents_rum_index_91000305 ALTER COLUMN 2 SET STATISTICS -1;
+ANALYZE :table_name;
+SELECT index_relation.relname, stats.staattnum, stats.stadistinct
+FROM pg_index AS indexes
+JOIN pg_class AS index_relation ON index_relation.oid = indexes.indexrelid
+JOIN pg_statistic AS stats ON stats.starelid = indexes.indexrelid
+WHERE indexes.indrelid = :'table_name'::regclass
+ORDER BY index_relation.relname, stats.staattnum;
+           relname            | staattnum | stadistinct 
+------------------------------+-----------+-------------
+ documents_rum_index_91000302 |         1 |          10
+ documents_rum_index_91000303 |         1 |          -1
+ documents_rum_index_91000304 |         1 |          10
+ documents_rum_index_91000305 |         1 |          10
+ documents_rum_index_91000305 |         2 |          -1
+(5 rows)
+
+EXPLAIN (ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"a":3}}');
+                                                                                                                                             QUERY PLAN                                                                                                                                              
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan)  (cost=5.15..56.40 rows=500 width=353) (actual rows=100 loops=1)
+   namespaceName: btree_planner_db.choices
+   indexName: a_1
+   a_1: (indexKey='BSONHEX0c0000001061000100000000', startup cost=0.275, total cost=5.025, selectivity=0.1, correlation=0.104, estimated index pages loaded=12.50%, estimated total index entries=1000, boundary selectivity=0.1, num boundaries=0, estimated data pages loaded=0.00%)
+   a_b: (indexKey='BSONHEX13000000106100010000001062000100000000', startup cost=0.275, total cost=9.025, selectivity=0.1, correlation=0.078, estimated index pages loaded=18.18%, estimated total index entries=1000, boundary selectivity=0.1, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Bitmap Heap Scan on documents_91000301 collection  (cost=5.15..56.40 rows=500 width=353) (actual rows=100 loops=1)
+         Filter: (document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "3" } }'::documentdb_core.bson)
+         Heap Blocks: exact=50
+         ->  Bitmap Index Scan on a_1  (cost=0.00..5.03 rows=100 width=0) (actual rows=100 loops=1)
+               Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "3" } }'::documentdb_core.bson)
+(10 rows)
+
+EXPLAIN (ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"b":493}}');
+                                                                                                                                                QUERY PLAN                                                                                                                                                 
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan)  (cost=0.28..8.29 rows=500 width=353) (actual rows=1 loops=1)
+   namespaceName: btree_planner_db.choices
+   indexName: b_1
+   b_1: (indexKey='BSONHEX0c0000001062000100000000', startup cost=0.275, total cost=4.283, selectivity=0.001, correlation=1.000, estimated index pages loaded=16.67%, estimated total index entries=1000, boundary selectivity=0.001, num boundaries=0, estimated data pages loaded=0.00%)
+   a_b: (indexKey='BSONHEX13000000106100010000001062000100000000', startup cost=0.275, total cost=51.775, selectivity=0.001, correlation=0.078, estimated index pages loaded=100.00%, estimated total index entries=1000, boundary selectivity=0.001, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Index Scan using b_1 on documents_91000301 collection  (cost=0.28..8.29 rows=500 width=353) (actual rows=1 loops=1)
+         Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'b'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "493" } }'::documentdb_core.bson)
+         Filter: (document OPERATOR(documentdb_api_catalog.@=) '{ "b" : { "$numberInt" : "493" } }'::documentdb_core.bson)
+(8 rows)
+
+-- Recheck the compound predicate with collected expression statistics.
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"a":3,"b":493}}');
+                                                                                                                                                QUERY PLAN                                                                                                                                                
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1 loops=1)
+   namespaceName: btree_planner_db.choices
+   indexName: b_1
+   b_1: (indexKey='BSONHEX0c0000001062000100000000', startup cost=0.275, total cost=4.283, selectivity=0.001, correlation=1.000, estimated index pages loaded=16.67%, estimated total index entries=1000, boundary selectivity=0.001, num boundaries=0, estimated data pages loaded=0.00%)
+   a_b: (indexKey='BSONHEX13000000106100010000001062000100000000', startup cost=0.275, total cost=4.285, selectivity=0.0001, correlation=0.078, estimated index pages loaded=9.09%, estimated total index entries=1000, boundary selectivity=0.0001, num boundaries=0, estimated data pages loaded=0.00%)
+   a_1: (indexKey='BSONHEX0c0000001061000100000000', startup cost=0.275, total cost=5.025, selectivity=0.1, correlation=0.104, estimated index pages loaded=12.50%, estimated total index entries=1000, boundary selectivity=0.1, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Index Scan using b_1 on documents_91000301 collection (actual rows=1 loops=1)
+         Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'b'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "493" } }'::documentdb_core.bson)
+         Filter: ((document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "3" } }'::documentdb_core.bson) AND (document OPERATOR(documentdb_api_catalog.@=) '{ "b" : { "$numberInt" : "493" } }'::documentdb_core.bson))
+(9 rows)
+
+-- Compare a broad predicate with and without the sequential-scan cost penalty.
+SET documentdb.enableExplainScanIndexCosts = off;
+RESET enable_seqscan;
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"a":{"$gte":0}}}');
+                                                        QUERY PLAN                                                        
+--------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1000 loops=1)
+   namespaceName: btree_planner_db.choices
+   ->  Seq Scan on documents_91000301 collection (actual rows=1000 loops=1)
+         Filter: (document OPERATOR(documentdb_api_catalog.@>=) '{ "a" : { "$numberInt" : "0" } }'::documentdb_core.bson)
+(4 rows)
+
+SET enable_seqscan = off;
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"a":{"$gte":0}}}');
+                                                                                                                                                                                          QUERY PLAN                                                                                                                                                                                           
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1000 loops=1)
+   namespaceName: btree_planner_db.choices
+   indexName: a_1
+   ->  Bitmap Heap Scan on documents_91000301 collection (actual rows=1000 loops=1)
+         Filter: (document OPERATOR(documentdb_api_catalog.@>=) '{ "a" : { "$numberInt" : "0" } }'::documentdb_core.bson)
+         Heap Blocks: exact=50
+         ->  Bitmap Index Scan on a_1 (actual rows=1000 loops=1)
+               Index Cond: ((documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.>=) '{ "$" : { "$numberInt" : "0" } }'::documentdb_core.bson) AND (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.<=) '{ "$" : { "$numberDouble" : "Infinity" } }'::documentdb_core.bson))
+(8 rows)
+
+-- Exercise single-index bitmaps and intersections/unions across separate paths.
+SET enable_indexscan = off;
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"b":493}}');
+                                                                                              QUERY PLAN                                                                                              
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1 loops=1)
+   namespaceName: btree_planner_db.choices
+   indexName: b_1
+   ->  Bitmap Heap Scan on documents_91000301 collection (actual rows=1 loops=1)
+         Filter: (document OPERATOR(documentdb_api_catalog.@=) '{ "b" : { "$numberInt" : "493" } }'::documentdb_core.bson)
+         Heap Blocks: exact=1
+         ->  Bitmap Index Scan on b_1 (actual rows=1 loops=1)
+               Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'b'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "493" } }'::documentdb_core.bson)
+(8 rows)
+
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"a":3,"c":4}}');
+                                                                                                              QUERY PLAN                                                                                                               
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=10 loops=1)
+   namespaceName: btree_planner_db.choices
+   indexName: c_1
+   indexName: a_1
+   ->  Bitmap Heap Scan on documents_91000301 collection (actual rows=10 loops=1)
+         Filter: ((document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "3" } }'::documentdb_core.bson) AND (document OPERATOR(documentdb_api_catalog.@=) '{ "c" : { "$numberInt" : "4" } }'::documentdb_core.bson))
+         Heap Blocks: exact=10
+         ->  BitmapAnd (actual rows=0 loops=1)
+               ->  Bitmap Index Scan on c_1 (actual rows=100 loops=1)
+                     Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'c'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "4" } }'::documentdb_core.bson)
+               ->  Bitmap Index Scan on a_1 (actual rows=100 loops=1)
+                     Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "3" } }'::documentdb_core.bson)
+(12 rows)
+
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"$or":[{"a":3},{"c":4}]}}');
+                                                                                                                 QUERY PLAN                                                                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=190 loops=1)
+   namespaceName: btree_planner_db.choices
+   indexName: a_1
+   indexName: c_1
+   ->  Bitmap Heap Scan on documents_91000301 collection (actual rows=190 loops=1)
+         Recheck Cond: ((document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "3" } }'::documentdb_core.bson) OR (document OPERATOR(documentdb_api_catalog.@=) '{ "c" : { "$numberInt" : "4" } }'::documentdb_core.bson))
+         Filter: ((document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "3" } }'::documentdb_core.bson) OR (document OPERATOR(documentdb_api_catalog.@=) '{ "c" : { "$numberInt" : "4" } }'::documentdb_core.bson))
+         Heap Blocks: exact=50
+         ->  BitmapOr (actual rows=0 loops=1)
+               ->  Bitmap Index Scan on a_1 (actual rows=100 loops=1)
+                     Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "3" } }'::documentdb_core.bson)
+               ->  Bitmap Index Scan on c_1 (actual rows=100 loops=1)
+                     Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'c'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "4" } }'::documentdb_core.bson)
+(13 rows)
+
+RESET enable_indexscan;
+-- Known limitation: hard exclusion mistakes single-clause B-trees for shard-key scans.
+SET documentdb.forceDisableSeqScan = on;
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"a":3}}');
+ERROR:  Could not find any valid index to push down for query
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"a":3,"b":493}}');
+ERROR:  Could not find any valid index to push down for query
+SET enable_indexscan = off;
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_planner_db', '{"find":"choices","filter":{"a":3,"c":4}}');
+                                                                                                              QUERY PLAN                                                                                                               
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=10 loops=1)
+   namespaceName: btree_planner_db.choices
+   indexName: c_1
+   indexName: a_1
+   ->  Bitmap Heap Scan on documents_91000301 collection (actual rows=10 loops=1)
+         Filter: ((document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "3" } }'::documentdb_core.bson) AND (document OPERATOR(documentdb_api_catalog.@=) '{ "c" : { "$numberInt" : "4" } }'::documentdb_core.bson))
+         Heap Blocks: exact=10
+         ->  BitmapAnd (actual rows=0 loops=1)
+               ->  Bitmap Index Scan on c_1 (actual rows=100 loops=1)
+                     Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'c'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "4" } }'::documentdb_core.bson)
+               ->  Bitmap Index Scan on a_1 (actual rows=100 loops=1)
+                     Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "3" } }'::documentdb_core.bson)
+(12 rows)
+
+RESET enable_indexscan;
+RESET documentdb.forceDisableSeqScan;
+RESET documentdb.enableAddShardKeyOnlyOnPrimaryKeyFilters;
+RESET documentdb_core.enableBsonSelectivityFromBtreeStats;
+RESET documentdb.enableExplainScanIndexCosts;
+RESET enable_seqscan;
+RESET client_min_messages;
+RESET documentdb.alternate_index_handler_name;
+RESET documentdb_core.bsonUseEJson;

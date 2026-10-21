@@ -11,12 +11,14 @@
 
 #include <postgres.h>
 #include <fmgr.h>
+#include <nodes/pathnodes.h>
 #include "index_am/index_am_utils.h"
 #include "utils/feature_counter.h"
 #include "access/relscan.h"
 #include "index_am/documentdb_rum.h"
 #include "index_am/index_am_extend_create.h"
 #include "index_am/index_am_extend_query.h"
+#include "opclass/bson_index_support.h"
 #include "utils/documentdb_errors.h"
 
 #include <miscadmin.h>
@@ -240,6 +242,50 @@ IsBsonRegularIndexAm(Oid indexAm)
 	 * we assume it is a MongoIndexKind_Extended index, not a regular bson index.
 	 */
 	return amEntry != NULL && amEntry->create_indexes_support_funcs == NULL;
+}
+
+
+IndexOptInfo *
+TryInjectIndexOptInfo(PlannerInfo *root, RelOptInfo *rel, IndexOptInfo *index)
+{
+	const BsonIndexAmEntry *amEntry = GetBsonIndexAmEntryByIndexOid(index->relam);
+	if (amEntry == NULL || amEntry->injectIndexOptInfo == NULL)
+	{
+		return NULL;
+	}
+
+	return amEntry->injectIndexOptInfo(root, rel, index);
+}
+
+
+OpExpr *
+GetOpExprClauseFromIndexAm(Oid indexAm, const MongoIndexOperatorInfo *operator,
+						   Expr *firstArgExpr, Expr *secondArg,
+						   bytea *indexOptions, bool *lossy)
+{
+	const BsonIndexAmEntry *amEntry = GetBsonIndexAmEntryByIndexOid(indexAm);
+	if (amEntry != NULL && amEntry->getOpExprClauseFromIndexOperator != NULL)
+	{
+		return amEntry->getOpExprClauseFromIndexOperator(operator, firstArgExpr,
+														 secondArg, indexOptions, lossy);
+	}
+
+	return GetOpExprClauseFromIndexOperator(operator, firstArgExpr, secondArg,
+											indexOptions);
+}
+
+
+OpExpr *
+GetFullScanExprFromIndexAm(Oid indexAm, Expr *documentExpr, Expr *sortSpec,
+						   bytea *indexOptions, bool *lossy)
+{
+	const BsonIndexAmEntry *amEntry = GetBsonIndexAmEntryByIndexOid(indexAm);
+	if (amEntry == NULL || amEntry->getFullScanExpr == NULL)
+	{
+		return NULL;
+	}
+
+	return amEntry->getFullScanExpr(documentExpr, sortSpec, indexOptions, lossy);
 }
 
 

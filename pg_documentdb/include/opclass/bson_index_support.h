@@ -140,6 +140,17 @@ OpExpr * GetOpExprClauseFromIndexOperator(const
 bool IsCollationPresentOnQueryOrIndex(const char *queryCollation, bytea *indexOptions);
 
 void ConsiderBtreeOrderByPushdown(PlannerInfo *root, IndexPath *indexPath);
+List * GetSortDetails(PlannerInfo *root, Index rti, bool *hasGroupby,
+					  bool *isOrderById, bool *hasDistinct);
+void ProcessOrderByStatements(PlannerInfo *root, IndexPath *path,
+							  int32_t minOrderByColumn, int32_t maxOrderByColumn,
+							  bool isMultiKeyIndex, bool hasPerPathMetadata,
+							  uint32_t multiKeyBitMask, bool isReducedCorrelatedIndex,
+							  bool prunedCorrelatedIndexQuals,
+							  const char *queryOrderPaths[INDEX_MAX_KEYS],
+							  bool equalityPrefixes[INDEX_MAX_KEYS],
+							  bool nonEqualityPrefixes[INDEX_MAX_KEYS],
+							  int32_t pathSortOrders[INDEX_MAX_KEYS]);
 bool GetBtreeIndexBoundQuals(BsonIndexStrategy strategy, const bson_value_t *queryValue,
 							 Index varno, Expr **firstBound, Expr **secondBound);
 bool ExtractExprsForObjectIdFunction(FuncExpr *expr, pgbsonelement *queryElement,

@@ -403,8 +403,6 @@ static Expr * CreateKnownFullScanExpr(Datum queryValue, Expr *documentExpr, int
 									  sortDirection);
 static OpExpr * CreateExistsTrueOpExpr(Expr *documentExpr, const char *sourcePath,
 									   uint32_t sourcePathLength);
-static List * GetSortDetails(PlannerInfo *root, Index rti,
-							 bool *hasGroupby, bool *isOrderById, bool *hasDistinct);
 static bool IsQueryCollationCompatibleWithIndex(const char *queryCollation,
 												bytea *indexOptions);
 static bool IsValidIndexPathForIdOrderBy(IndexPath *indexPath, List *sortDetails);
@@ -971,10 +969,10 @@ OpExprForAggregationStageSupportFunction(Node *supportRequest)
 		return NULL;
 	}
 
-	OpExpr *finalExpression = GetOpExprClauseFromIndexOperator(operator,
-															   linitial(funcExpr->args),
-															   lsecond(funcExpr->args),
-															   options);
+	OpExpr *finalExpression = GetOpExprClauseFromIndexAm(req->index->relam, operator,
+														 linitial(funcExpr->args),
+														 lsecond(funcExpr->args),
+														 options, &req->lossy);
 	return (Expr *) finalExpression;
 }
 
@@ -3869,7 +3867,7 @@ BuildPointReadIndexClause(RestrictInfo *restrictInfo, int indexCol)
 }
 
 
-static List *
+List *
 GetSortDetails(PlannerInfo *root, Index rti, bool *hasGroupby,
 			   bool *isOrderById, bool *hasDistinctScan)
 {
@@ -6563,7 +6561,7 @@ EnsureIndexClausesOwned(IndexPath *path, List *sharedIndexClauses)
 }
 
 
-static void
+void
 ProcessOrderByStatements(PlannerInfo *root,
 						 IndexPath *path,
 						 int32_t minOrderByColumn,
@@ -8502,7 +8500,7 @@ HandleSupportRequestCondition(SupportRequestIndexCondition *req)
 	 *  TODO : Push down to index if operand is not a constant
 	 */
 	Node *operand = lsecond(args);
-	if (!IsA(operand, Const))
+	if (!IsA(operand, Const) || req->index->opclassoptions == NULL)
 	{
 		return NULL;
 	}
@@ -8531,8 +8529,9 @@ HandleSupportRequestCondition(SupportRequestIndexCondition *req)
 		}
 
 		Expr *finalExpression =
-			(Expr *) GetOpExprClauseFromIndexOperator(operator, linitial(args),
-													  (Expr *) operand, options);
+			(Expr *) GetOpExprClauseFromIndexAm(req->index->relam, operator,
+												linitial(args), (Expr *) operand,
+												options, &req->lossy);
 		return finalExpression;
 	}
 
@@ -8559,10 +8558,11 @@ HandleSupportRequestCondition(SupportRequestIndexCondition *req)
 			return NULL;
 		}
 
-		Expr *finalExpression =
-			(Expr *) GetOpExprClauseFromIndexOperator(operator, linitial(args),
-													  (Expr *) operand, options);
-		return finalExpression;
+		OpExpr *finalExpression = GetOpExprClauseFromIndexAm(req->index->relam, operator,
+															 linitial(args),
+															 (Expr *) operand,
+															 options, &req->lossy);
+		return (Expr *) finalExpression;
 	}
 
 	return NULL;
@@ -10997,7 +10997,8 @@ static Expr *
 ProcessFullScanForOrderBy(SupportRequestIndexCondition *req, List *args)
 {
 	Node *operand = lsecond(args);
-	if (!IsA(operand, Const))
+	if (!IsA(operand, Const) || ((Const *) operand)->constisnull ||
+		req->index->opclassoptions == NULL)
 	{
 		return NULL;
 	}
@@ -11015,7 +11016,9 @@ ProcessFullScanForOrderBy(SupportRequestIndexCondition *req, List *args)
 
 	if (!IsCompositeOpFamilyOid(req->index->relam, operatorFamily))
 	{
-		return NULL;
+		return (Expr *) GetFullScanExprFromIndexAm(req->index->relam, linitial(args),
+												   (Expr *) operand, options,
+												   &req->lossy);
 	}
 
 	pgbsonelement sortElement;

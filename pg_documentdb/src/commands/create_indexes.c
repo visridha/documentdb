@@ -328,7 +328,8 @@ static char * GenerateIndexExprStr(const char *indexAmSuffix,
 								   const char *indexAmOpClassInternalCatalogSchema,
 								   const char *collationString,
 								   const char *optionalCollectionId,
-								   bool supportsMetadataBasedTracking);
+								   bool supportsMetadataBasedTracking,
+								   const char *pathExtractionFuncName);
 static char * Generate2dsphereIndexExprStr(const IndexDefKey *indexDefKey);
 static char * Generate2dsphereSparseExprStr(const IndexDefKey *indexDefKey);
 static char * GenerateIndexFilterStr(uint64 collectionId, Expr *indexDefPartFilterExpr);
@@ -5354,6 +5355,11 @@ CreatePostgresIndexCreationCmd(uint64 collectionId, IndexDef *indexDef, int inde
 	bool unique = indexDef->unique == BoolIndexOption_True;
 	bool sparse = indexDef->sparse == BoolIndexOption_True;
 	const BsonIndexAmEntry *indexAm = GetIndexAmHandlerByName(indexDef);
+	const char *indexAmName = indexAm->am_name_is_exact ? indexAm->am_name :
+							  psprintf("%s_%s", ExtensionObjectPrefix, indexAm->am_name);
+	bool enableCompositeOpClass = IsCompositePathIndex(indexDef) &&
+								  indexAm->get_composite_path_op_family_oid != NULL &&
+								  OidIsValid(indexAm->get_composite_path_op_family_oid());
 
 	/*
 	 * For unique indexes, compute enableLargeIndexKeys upfront since
@@ -5467,7 +5473,7 @@ CreatePostgresIndexCreationCmd(uint64 collectionId, IndexDef *indexDef, int inde
 							 ApiDataSchemaName, collectionId);
 		}
 
-		bool enableNewIndexOpClass = IsCompositePathIndex(indexDef);
+		bool enableNewIndexOpClass = enableCompositeOpClass;
 
 		char collectionIdString[128] = { 0 };
 		pg_snprintf(collectionIdString, sizeof(collectionIdString), "%lu", collectionId);
@@ -5482,8 +5488,8 @@ CreatePostgresIndexCreationCmd(uint64 collectionId, IndexDef *indexDef, int inde
 		bool buildAsUnique = false;
 		appendStringInfo(cmdStr,
 						 " ADD CONSTRAINT " DOCUMENT_DATA_TABLE_INDEX_NAME_FORMAT
-						 " EXCLUDE USING %s_%s (%s) %s%s%s",
-						 indexId, ExtensionObjectPrefix, indexAm->am_name,
+						 " EXCLUDE USING %s (%s) %s%s%s",
+						 indexId, indexAmName,
 						 GenerateIndexExprStr(indexAm->am_name, unique,
 											  buildAsUnique,
 											  sparse, enableNewIndexOpClass,
@@ -5498,7 +5504,8 @@ CreatePostgresIndexCreationCmd(uint64 collectionId, IndexDef *indexDef, int inde
 											  indexAm->get_opclass_internal_catalog_schema(),
 											  indexDef->collationString,
 											  optionalCollectionId,
-											  indexAm->get_opclass_metadata != NULL),
+											  indexAm->get_opclass_metadata != NULL,
+											  indexAm->pathExtractionFuncName),
 						 indexDef->partialFilterExpr ? "WHERE (" : "",
 						 indexDef->partialFilterExpr ?
 						 GenerateIndexFilterStr(collectionId,
@@ -5627,7 +5634,7 @@ CreatePostgresIndexCreationCmd(uint64 collectionId, IndexDef *indexDef, int inde
 								   BoolIndexOption_False;
 		}
 
-		bool enableNewIndexOpClass = IsCompositePathIndex(indexDef);
+		bool enableNewIndexOpClass = enableCompositeOpClass;
 
 		bool useReducedWildcardTermGeneration = ForceWildcardReducedTerm ||
 												(indexDef->enableReducedWildcardTerms ==
@@ -5645,9 +5652,8 @@ CreatePostgresIndexCreationCmd(uint64 collectionId, IndexDef *indexDef, int inde
 		}
 
 		appendStringInfo(cmdStr,
-						 " USING %s_%s (%s) %s%s%s",
-						 ExtensionObjectPrefix,
-						 indexAm->am_name,
+						 " USING %s (%s) %s%s%s",
+						 indexAmName,
 						 GenerateIndexExprStr(indexAm->am_name,
 											  unique, buildAsUnique,
 											  sparse, enableNewIndexOpClass,
@@ -5662,7 +5668,8 @@ CreatePostgresIndexCreationCmd(uint64 collectionId, IndexDef *indexDef, int inde
 											  indexAm->get_opclass_internal_catalog_schema(),
 											  indexDef->collationString,
 											  optionalCollectionId,
-											  indexAm->get_opclass_metadata != NULL),
+											  indexAm->get_opclass_metadata != NULL,
+											  indexAm->pathExtractionFuncName),
 						 indexDef->partialFilterExpr ? "WHERE (" : "",
 						 indexDef->partialFilterExpr ?
 						 GenerateIndexFilterStr(collectionId,
@@ -6096,7 +6103,8 @@ GenerateIndexExprStr(const char *indexAmSuffix,
 					 const char *indexAmOpClassInternalCatalogSchema,
 					 const char *collationString,
 					 const char *optionalCollectionId,
-					 bool supportsMetadataBasedTracking)
+					 bool supportsMetadataBasedTracking,
+					 const char *pathExtractionFuncName)
 {
 	StringInfo indexExprStr = makeStringInfo();
 
@@ -6549,17 +6557,34 @@ GenerateIndexExprStr(const char *indexAmSuffix,
 						generateNotFoundTermOption = ",generateNotFoundTerm=true";
 					}
 
-					appendStringInfo(indexExprStr,
-									 "%s document %s.bson_%s_single_path_ops(path=%s%s%s%s%s%s)",
-									 firstColumnWritten ? "," : "",
-									 indexAmOpClassCatalogSchema,
-									 indexAmSuffix,
-									 quote_literal_cstr(keyPath),
-									 indexKeyPath->isWildcard ? ",iswildcard=true" : "",
-									 indexTermSizeLimitArg,
-									 generateNotFoundTermOption,
-									 useReducedWildcardOption,
-									 collationArg);
+					if (pathExtractionFuncName != NULL)
+					{
+						appendStringInfo(indexExprStr,
+										 "%s %s.%s(document, %s, %s) %s.bson_%s_single_path_ops",
+										 firstColumnWritten ? "," : "",
+										 indexAmOpClassCatalogSchema,
+										 pathExtractionFuncName,
+										 quote_literal_cstr(keyPath),
+										 hasApplicableCollation ?
+										 quote_literal_cstr(collationString) : "NULL",
+										 indexAmOpClassCatalogSchema,
+										 indexAmSuffix);
+					}
+					else
+					{
+						appendStringInfo(indexExprStr,
+										 "%s document %s.bson_%s_single_path_ops(path=%s%s%s%s%s%s)",
+										 firstColumnWritten ? "," : "",
+										 indexAmOpClassCatalogSchema,
+										 indexAmSuffix,
+										 quote_literal_cstr(keyPath),
+										 indexKeyPath->isWildcard ? ",iswildcard=true" :
+										 "",
+										 indexTermSizeLimitArg,
+										 generateNotFoundTermOption,
+										 useReducedWildcardOption,
+										 collationArg);
+					}
 
 					if (unique)
 					{

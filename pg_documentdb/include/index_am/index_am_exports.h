@@ -15,6 +15,12 @@
 #include <utils/rel.h>
 
 struct IndexScanDescData;
+struct PlannerInfo;
+struct RelOptInfo;
+struct IndexOptInfo;
+struct MongoIndexOperatorInfo;
+struct Expr;
+struct OpExpr;
 typedef struct ExplainWriterFuncs
 {
 	void (*writeBool)(const char *name, bool value, void *writer);
@@ -101,6 +107,28 @@ typedef struct
 	PGFunction skip_tids_on_current_entry;
 
 	bool supports_optional_key;
+
+	/* Use am_name without the extension prefix in index creation commands. */
+	bool am_name_is_exact;
+
+	/* Optional function in the opclass catalog schema taking (document, path, collation). */
+	char *pathExtractionFuncName;
+
+	/* Optional planner callback returning an additional index, or NULL. */
+	struct IndexOptInfo *(*injectIndexOptInfo)(struct PlannerInfo *root,
+											   struct RelOptInfo *rel,
+											   struct IndexOptInfo *index);
+
+	/* Optional index clause builder. A NULL result declines the clause. */
+	struct OpExpr *(*getOpExprClauseFromIndexOperator)(
+		const struct MongoIndexOperatorInfo *operator,
+		struct Expr *firstArgExpr, struct Expr *secondArg,
+		bytea *indexOptions, bool *lossy);
+
+	/* Optional full-scan clause builder for non-composite operator families. */
+	struct OpExpr *(*getFullScanExpr)(struct Expr *documentExpr,
+									  struct Expr *sortSpec,
+									  bytea *indexOptions, bool *lossy);
 } BsonIndexAmEntry;
 
 /*

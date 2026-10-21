@@ -77,6 +77,10 @@ make check-valgrind                     # Full suite with memory checking
 
 Schedules: `basic_schedule` (full), `minimal_schedule` (fast). Default test port: **58070**.
 
+Each SQL regression test must set `documentdb.next_collection_id` and
+`documentdb.next_collection_index_id` to a test-specific, globally unique base
+that is a multiple of 100.
+
 ### Rust Gateway Tests
 
 Unit and integration tests for the MongoDB wire protocol gateway.

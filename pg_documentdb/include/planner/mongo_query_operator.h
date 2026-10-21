@@ -153,7 +153,7 @@ typedef struct
  * MongoIndexOperatorInfo holds information about the mongo operator
  * and the corresponding information for pushing down operators to the index
  */
-typedef struct
+typedef struct MongoIndexOperatorInfo
 {
 	/* bson query operator name (e.g. "<bson> @= <bson query>") - if applicable */
 	char *postgresOperatorName;

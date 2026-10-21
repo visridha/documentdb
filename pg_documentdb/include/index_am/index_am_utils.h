@@ -57,6 +57,20 @@ const BsonIndexAmEntry * GetBsonIndexAmByIndexAmName(const char *index_am_name);
  */
 bool IsBsonRegularIndexAm(Oid indexAm);
 
+struct IndexOptInfo * TryInjectIndexOptInfo(struct PlannerInfo *root,
+											struct RelOptInfo *rel,
+											struct IndexOptInfo *index);
+
+struct OpExpr * GetOpExprClauseFromIndexAm(Oid indexAm, const struct
+										   MongoIndexOperatorInfo *operator,
+										   struct Expr *firstArgExpr, struct
+										   Expr *secondArg,
+										   bytea *indexOptions, bool *lossy);
+
+struct OpExpr * GetFullScanExprFromIndexAm(Oid indexAm, struct Expr *documentExpr,
+										   struct Expr *sortSpec,
+										   bytea *indexOptions, bool *lossy);
+
 bool BsonIndexAmRequiresRangeOptimization(Oid indexAm, Oid opFamilyOid);
 
 /*

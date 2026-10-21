@@ -1103,6 +1103,7 @@ ExtensionGetRelationInfoHookCore(PlannerInfo *root, Oid relationObjectId,
 	if (list_length(rel->indexlist) > 0)
 	{
 		ListCell *cell;
+		List *addedIndexes = NIL;
 		foreach(cell, rel->indexlist)
 		{
 			IndexOptInfo *firstIndex = lfirst(cell);
@@ -1122,6 +1123,22 @@ ExtensionGetRelationInfoHookCore(PlannerInfo *root, Oid relationObjectId,
 			{
 				pfeIndexes = lappend(pfeIndexes, firstIndex);
 			}
+
+			if (firstIndex->indexprs != NIL &&
+				IsBsonRegularIndexAm(firstIndex->relam))
+			{
+				IndexOptInfo *injectedIndex = TryInjectIndexOptInfo(root, rel,
+																	firstIndex);
+				if (injectedIndex != NULL)
+				{
+					addedIndexes = lappend(addedIndexes, injectedIndex);
+				}
+			}
+		}
+
+		if (addedIndexes != NIL)
+		{
+			rel->indexlist = list_concat(rel->indexlist, addedIndexes);
 		}
 	}
 

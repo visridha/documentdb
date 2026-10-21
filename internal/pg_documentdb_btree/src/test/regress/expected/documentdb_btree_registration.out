@@ -1,0 +1,511 @@
+SET documentdb.next_collection_id TO 91000200;
+SET documentdb.next_collection_index_id TO 91000200;
+SET documentdb_core.bsonUseEJson TO on;
+CREATE TABLE btree_registration_test (value int4);
+CREATE INDEX ON btree_registration_test USING btree (value);
+INSERT INTO btree_registration_test VALUES (3), (1), (2);
+SET enable_seqscan = off;
+EXPLAIN (COSTS OFF)
+SELECT value FROM btree_registration_test WHERE value >= 2 ORDER BY value;
+                                     QUERY PLAN                                     
+------------------------------------------------------------------------------------
+ Index Only Scan using btree_registration_test_value_idx on btree_registration_test
+   Index Cond: (value >= 2)
+(2 rows)
+
+SELECT value FROM btree_registration_test WHERE value >= 2 ORDER BY value;
+ value 
+-------
+     2
+     3
+(2 rows)
+
+CREATE TABLE btree_bson_test (document documentdb_core.bson);
+CREATE INDEX ON btree_bson_test USING btree (
+    document documentdb_btree_catalog.bson_btree_single_path_ops);
+INSERT INTO btree_bson_test VALUES ('{"a":3}'), ('{"a":1}'), ('{"a":2}');
+COPY (
+    SELECT document::text FROM btree_bson_test
+    WHERE document OPERATOR(documentdb_core.>=) '{"a":2}'::documentdb_core.bson
+    ORDER BY btree_bson_test.document USING OPERATOR(documentdb_core.<)
+) TO STDOUT;
+{ "a" : { "$numberInt" : "2" } }
+{ "a" : { "$numberInt" : "3" } }
+-- Registrations without the flag retain prefixed index and constraint names.
+SET client_min_messages = warning;
+DO $$
+BEGIN
+    PERFORM documentdb_api_internal.create_indexes_non_concurrently(
+        'btree_registration_db',
+        '{"createIndexes":"default_am","indexes":[{"key":{"a":1},"name":"a_1"},{"key":{"b":1},"name":"b_1","unique":true}]}');
+END;
+$$;
+-- The operator-family check must preserve ordinary single-path index queries.
+SELECT documentdb_api.insert_one(
+    'btree_registration_db', 'default_am', '{"_id":1,"a":2}') AS insert_result;
+                            insert_result                             
+----------------------------------------------------------------------
+ { "n" : { "$numberInt" : "1" }, "ok" : { "$numberDouble" : "1.0" } }
+(1 row)
+
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db', '{"find":"default_am","filter":{"a":2}}');
+                             document                             
+------------------------------------------------------------------
+ { "_id" : { "$numberInt" : "1" }, "a" : { "$numberInt" : "2" } }
+(1 row)
+
+-- The extractor is defined and must not short-circuit on a NULL collation.
+SET documentdb.alternate_index_handler_name = 'btree';
+\set VERBOSITY terse
+SELECT documentdb_btree_catalog.bson_btree_extract_path(
+    '{"a":1}'::documentdb_core.bson, 'a', NULL) AS extracted;
+            extracted             
+----------------------------------
+ { "$" : { "$numberInt" : "1" } }
+(1 row)
+
+SELECT documentdb_btree_catalog.bson_btree_extract_path(document, path, NULL) AS extracted
+FROM (VALUES
+    ('{"nested":{"value":2}}'::documentdb_core.bson, 'nested.value'),
+    ('{"a":[1,2]}'::documentdb_core.bson, 'a'),
+    ('{}'::documentdb_core.bson, 'a')
+) AS inputs(document, path);
+                          extracted                           
+--------------------------------------------------------------
+ { "$" : { "$numberInt" : "2" } }
+ { "$" : [ { "$numberInt" : "1" }, { "$numberInt" : "2" } ] }
+ { "$" : null }
+(3 rows)
+
+SELECT documentdb_btree_catalog.bson_btree_extract_path(
+    '{"a":[{"b":1}]}'::documentdb_core.bson, 'a.b', NULL);
+ERROR:  B-tree BSON path extraction through arrays is not supported
+SET documentdb_core.enableCollation = on;
+SET documentdb.enableCollationWithNonUniqueOrderedIndexes = on;
+DO $$
+BEGIN
+    PERFORM documentdb_api_internal.create_indexes_non_concurrently(
+        'btree_registration_db',
+        $cmd${"createIndexes":"extraction","indexes":[
+            {"key":{"a":1,"nested.value":1},"name":"a_nested"},
+            {"key":{"label":1},"name":"collated","collation":{"locale":"en","strength":1}}
+        ]}$cmd$);
+END;
+$$;
+SELECT 'documentdb_data.documents_' || collection_id AS table_name
+FROM documentdb_api_catalog.collections
+WHERE database_name = 'btree_registration_db' AND collection_name = 'extraction'
+\gset
+\d :table_name
+               Table "documentdb_data.documents_91000202"
+     Column      |         Type         | Collation | Nullable | Default 
+-----------------+----------------------+-----------+----------+---------
+ shard_key_value | bigint               |           | not null | 
+ object_id       | documentdb_core.bson |           | not null | 
+ document        | documentdb_core.bson |           | not null | 
+Indexes:
+    "collection_pk_91000202" PRIMARY KEY, btree (shard_key_value, object_id)
+    "documents_rum_index_91000205" btree (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) documentdb_btree_catalog.bson_btree_single_path_ops, documentdb_btree_catalog.bson_btree_extract_path(document, 'nested.value'::text, NULL::text) documentdb_btree_catalog.bson_btree_single_path_ops)
+    "documents_rum_index_91000206" btree (documentdb_btree_catalog.bson_btree_extract_path(document, 'label'::text, 'en-u-ks-level1'::text) documentdb_btree_catalog.bson_btree_single_path_ops)
+Check constraints:
+    "shard_key_value_check" CHECK (shard_key_value = '91000202'::bigint)
+
+SELECT documentdb_api.insert_one(
+    'btree_registration_db', 'extraction',
+    '{"_id":1,"a":1,"nested":{"value":10},"label":"alpha"}') AS insert_result;
+                            insert_result                             
+----------------------------------------------------------------------
+ { "n" : { "$numberInt" : "1" }, "ok" : { "$numberDouble" : "1.0" } }
+(1 row)
+
+SELECT documentdb_api.insert_one(
+    'btree_registration_db', 'extraction',
+    '{"_id":2,"a":2,"nested":{"value":20},"label":"beta"}') AS insert_result;
+                            insert_result                             
+----------------------------------------------------------------------
+ { "n" : { "$numberInt" : "1" }, "ok" : { "$numberDouble" : "1.0" } }
+(1 row)
+
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document
+FROM :table_name
+WHERE documentdb_btree_catalog.bson_btree_extract_path(document, 'a', NULL)
+      OPERATOR(documentdb_core.=) '{"$":2}'::documentdb_core.bson;
+                                                                                                                                                           QUERY PLAN                                                                                                                                                            
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1 loops=1)
+   namespaceName: btree_registration_db.extraction
+   indexName: a_nested
+   a_nested: (indexKey='BSONHEX1e00000010610001000000106e65737465642e76616c7565000100000000', startup cost=0.150, total cost=4.210, selectivity=0.01, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.01, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Bitmap Heap Scan on documents_91000202 (actual rows=1 loops=1)
+         Recheck Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "2" } }'::documentdb_core.bson)
+         Heap Blocks: exact=1
+         ->  Bitmap Index Scan on a_nested (actual rows=1 loops=1)
+               Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "2" } }'::documentdb_core.bson)
+(9 rows)
+
+SELECT document
+FROM :table_name
+WHERE documentdb_btree_catalog.bson_btree_extract_path(document, 'a', NULL)
+      OPERATOR(documentdb_core.=) '{"$":2}'::documentdb_core.bson;
+                                                               document                                                               
+--------------------------------------------------------------------------------------------------------------------------------------
+ { "_id" : { "$numberInt" : "2" }, "a" : { "$numberInt" : "2" }, "nested" : { "value" : { "$numberInt" : "20" } }, "label" : "beta" }
+(1 row)
+
+-- MongoDB comparison operators use the injected document-column index keys.
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document
+FROM :table_name
+WHERE document OPERATOR(documentdb_api_catalog.@=) '{"a":2}'::documentdb_core.bson;
+                                                                                                                                                           QUERY PLAN                                                                                                                                                            
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1 loops=1)
+   namespaceName: btree_registration_db.extraction
+   indexName: a_nested
+   a_nested: (indexKey='BSONHEX1e00000010610001000000106e65737465642e76616c7565000100000000', startup cost=0.150, total cost=4.210, selectivity=0.01, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.01, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Bitmap Heap Scan on documents_91000202 (actual rows=1 loops=1)
+         Filter: (document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "2" } }'::documentdb_core.bson)
+         Heap Blocks: exact=1
+         ->  Bitmap Index Scan on a_nested (actual rows=1 loops=1)
+               Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "2" } }'::documentdb_core.bson)
+(9 rows)
+
+-- API predicates use bsonquery operands, unlike the direct comparison above.
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document
+FROM :table_name
+WHERE documentdb_api_catalog.bson_dollar_eq(
+    document, '{"a":2}'::documentdb_core.bsonquery);
+                                                                                                                                                           QUERY PLAN                                                                                                                                                            
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1 loops=1)
+   namespaceName: btree_registration_db.extraction
+   indexName: a_nested
+   a_nested: (indexKey='BSONHEX1e00000010610001000000106e65737465642e76616c7565000100000000', startup cost=0.150, total cost=4.210, selectivity=0.01, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.01, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Bitmap Heap Scan on documents_91000202 (actual rows=1 loops=1)
+         Filter: (document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "2" } }'::documentdb_core.bson)
+         Heap Blocks: exact=1
+         ->  Bitmap Index Scan on a_nested (actual rows=1 loops=1)
+               Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "2" } }'::documentdb_core.bson)
+(9 rows)
+
+-- The API planner may still prefer the cheaper shard-key index.
+-- Log both expression-index copies; the plain-column primary key is not copied.
+SET client_min_messages = log;
+SET documentdb.logRelationIndexesOrder = on;
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db', '{"find":"extraction","filter":{"a":2}}');
+LOG:  Name: documents_rum_index_91000206, access method: btree, 1st opfamily: bson_btree_single_path_ops, numPaths 1
+LOG:  Name: documents_rum_index_91000205, access method: btree, 1st opfamily: bson_btree_single_path_ops, numPaths 2
+LOG:  Name: collection_pk_91000202, access method: btree, 1st opfamily: integer_ops, numPaths 2
+LOG:  Name: documents_rum_index_91000206, access method: btree, 1st opfamily: bson_btree_single_path_ops, numPaths 1
+LOG:  Name: documents_rum_index_91000205, access method: btree, 1st opfamily: bson_btree_single_path_ops, numPaths 2
+                                                                                                                                                           QUERY PLAN                                                                                                                                                            
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1 loops=1)
+   namespaceName: btree_registration_db.extraction
+   indexName: _id_
+   _id_: (indexKey='{"_id": 1}', startup cost=0.150, total cost=4.180, selectivity=0.005, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.005, num boundaries=0, estimated data pages loaded=0.00%)
+   a_nested: (indexKey='BSONHEX1e00000010610001000000106e65737465642e76616c7565000100000000', startup cost=0.150, total cost=4.210, selectivity=0.01, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.01, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Bitmap Heap Scan on documents_91000202 collection (actual rows=1 loops=1)
+         Recheck Cond: (shard_key_value = '91000202'::bigint)
+         Filter: (document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "2" } }'::documentdb_core.bson)
+         Rows Removed by Filter: 1
+         Heap Blocks: exact=1
+         ->  Bitmap Index Scan on _id_ (actual rows=2 loops=1)
+               Index Cond: (shard_key_value = '91000202'::bigint)
+(12 rows)
+
+SET documentdb.logRelationIndexesOrder = off;
+SET client_min_messages = warning;
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_pipeline(
+    'btree_registration_db',
+    '{"aggregate":"extraction","pipeline":[{"$match":{"a":2}}],"cursor":{}}');
+                                                                                                                                                           QUERY PLAN                                                                                                                                                            
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1 loops=1)
+   namespaceName: btree_registration_db.extraction
+   indexName: _id_
+   _id_: (indexKey='{"_id": 1}', startup cost=0.150, total cost=4.180, selectivity=0.005, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.005, num boundaries=0, estimated data pages loaded=0.00%)
+   a_nested: (indexKey='BSONHEX1e00000010610001000000106e65737465642e76616c7565000100000000', startup cost=0.150, total cost=4.210, selectivity=0.01, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.01, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Bitmap Heap Scan on documents_91000202 collection (actual rows=1 loops=1)
+         Recheck Cond: (shard_key_value = '91000202'::bigint)
+         Filter: (document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "2" } }'::documentdb_core.bson)
+         Rows Removed by Filter: 1
+         Heap Blocks: exact=1
+         ->  Bitmap Index Scan on _id_ (actual rows=2 loops=1)
+               Index Cond: (shard_key_value = '91000202'::bigint)
+(12 rows)
+
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_pipeline(
+    'btree_registration_db',
+    '{"aggregate":"extraction","pipeline":[{"$match":{"a":2}}],"hint":"a_nested","cursor":{}}');
+                                                                                                                                                           QUERY PLAN                                                                                                                                                            
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1 loops=1)
+   namespaceName: btree_registration_db.extraction
+   indexName: a_nested
+   _id_: (indexKey='{"_id": 1}', startup cost=0.150, total cost=4.180, selectivity=0.005, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.005, num boundaries=0, estimated data pages loaded=0.00%)
+   a_nested: (indexKey='BSONHEX1e00000010610001000000106e65737465642e76616c7565000100000000', startup cost=0.150, total cost=4.210, selectivity=0.01, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.01, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Bitmap Heap Scan on documents_91000202 collection (actual rows=1 loops=1)
+         Filter: (document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "2" } }'::documentdb_core.bson)
+         Heap Blocks: exact=1
+         ->  Bitmap Index Scan on a_nested (actual rows=1 loops=1)
+               Index Cond: (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "2" } }'::documentdb_core.bson)
+(10 rows)
+
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db', '{"find":"extraction","filter":{"a":{"$gt":1}}}');
+                                                                                                                                                                                       QUERY PLAN                                                                                                                                                                                       
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1 loops=1)
+   namespaceName: btree_registration_db.extraction
+   indexName: a_nested
+   a_nested: (indexKey='BSONHEX1e00000010610001000000106e65737465642e76616c7565000100000000', startup cost=0.150, total cost=4.160, selectivity=0.0001, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.0001, num boundaries=0, estimated data pages loaded=0.00%)
+   _id_: (indexKey='{"_id": 1}', startup cost=0.150, total cost=4.180, selectivity=0.005, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.005, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Index Scan using a_nested on documents_91000202 collection (actual rows=1 loops=1)
+         Index Cond: ((documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.>) '{ "$" : { "$numberInt" : "1" } }'::documentdb_core.bson) AND (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.<=) '{ "$" : { "$numberDouble" : "Infinity" } }'::documentdb_core.bson))
+         Filter: (document OPERATOR(documentdb_api_catalog.@>) '{ "a" : { "$numberInt" : "1" } }'::documentdb_core.bson)
+(8 rows)
+
+SET enable_bitmapscan = off;
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db',
+    '{"find":"extraction","filter":{"a":2,"nested.value":{"$gt":10}}}');
+                                                                                                                                                                                                                                                                                         QUERY PLAN                                                                                                                                                                                                                                                                                         
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1 loops=1)
+   namespaceName: btree_registration_db.extraction
+   indexName: a_nested
+   a_nested: (indexKey='BSONHEX1e00000010610001000000106e65737465642e76616c7565000100000000', startup cost=0.150, total cost=4.163, selectivity=1e-06, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=1e-06, num boundaries=0, estimated data pages loaded=0.00%)
+   _id_: (indexKey='{"_id": 1}', startup cost=0.150, total cost=4.180, selectivity=0.005, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.005, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Index Scan using a_nested on documents_91000202 collection (actual rows=1 loops=1)
+         Index Cond: ((documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.=) '{ "$" : { "$numberInt" : "2" } }'::documentdb_core.bson) AND (documentdb_btree_catalog.bson_btree_extract_path(document, 'nested.value'::text, NULL::text) OPERATOR(documentdb_core.>) '{ "$" : { "$numberInt" : "10" } }'::documentdb_core.bson) AND (documentdb_btree_catalog.bson_btree_extract_path(document, 'nested.value'::text, NULL::text) OPERATOR(documentdb_core.<=) '{ "$" : { "$numberDouble" : "Infinity" } }'::documentdb_core.bson))
+         Filter: ((document OPERATOR(documentdb_api_catalog.@=) '{ "a" : { "$numberInt" : "2" } }'::documentdb_core.bson) AND (document OPERATOR(documentdb_api_catalog.@>) '{ "nested.value" : { "$numberInt" : "10" } }'::documentdb_core.bson))
+(8 rows)
+
+RESET enable_bitmapscan;
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db',
+    '{"find":"extraction","filter":{"a":{"$lt":2}},"projection":{"_id":1}}');
+              document              
+------------------------------------
+ { "_id" : { "$numberInt" : "1" } }
+(1 row)
+
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db',
+    '{"find":"extraction","filter":{"a":{"$lte":1}},"projection":{"_id":1}}');
+              document              
+------------------------------------
+ { "_id" : { "$numberInt" : "1" } }
+(1 row)
+
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db',
+    '{"find":"extraction","filter":{"a":{"$gt":1}},"projection":{"_id":1}}');
+              document              
+------------------------------------
+ { "_id" : { "$numberInt" : "2" } }
+(1 row)
+
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db',
+    '{"find":"extraction","filter":{"a":{"$gte":2}},"projection":{"_id":1}}');
+              document              
+------------------------------------
+ { "_id" : { "$numberInt" : "2" } }
+(1 row)
+
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db',
+    '{"find":"extraction","filter":{"nested.value":20},"projection":{"_id":1}}');
+              document              
+------------------------------------
+ { "_id" : { "$numberInt" : "2" } }
+(1 row)
+
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db',
+    '{"find":"extraction","filter":{"a":{"$exists":true}},"projection":{"_id":1}}');
+              document              
+------------------------------------
+ { "_id" : { "$numberInt" : "1" } }
+ { "_id" : { "$numberInt" : "2" } }
+(2 rows)
+
+-- Range bounds must exclude other BSON types without filtering them on the heap.
+DO $$
+BEGIN
+    PERFORM documentdb_api.insert_one(
+        'btree_registration_db', 'extraction', document::documentdb_core.bson)
+    FROM (VALUES
+        ('{"_id":10,"a":{"$numberLong":"3"}}'),
+        ('{"_id":11,"a":{"$numberDouble":"4.5"}}'),
+        ('{"_id":12,"a":{"$numberDecimal":"5.5"}}'),
+        ('{"_id":13,"a":{"$numberDouble":"Infinity"}}'),
+        ('{"_id":14,"a":{"$numberDouble":"-Infinity"}}'),
+        ('{"_id":15,"a":{"$numberDouble":"NaN"}}'),
+        ('{"_id":16,"a":"alpha"}'),
+        ('{"_id":17,"a":"zeta"}'),
+        ('{"_id":18,"a":null}'),
+        ('{"_id":19,"a":true}'),
+        ('{"_id":20,"a":{"value":1}}'),
+        ('{"_id":21,"a":{"$minKey":1}}'),
+        ('{"_id":22,"a":{"$maxKey":1}}')
+    ) AS inputs(document);
+END;
+$$;
+SET enable_bitmapscan = off;
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db', '{"find":"extraction","filter":{"a":{"$gt":1}}}');
+                                                                                                                                                                                       QUERY PLAN                                                                                                                                                                                       
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=5 loops=1)
+   namespaceName: btree_registration_db.extraction
+   indexName: a_nested
+   a_nested: (indexKey='BSONHEX1e00000010610001000000106e65737465642e76616c7565000100000000', startup cost=0.150, total cost=4.160, selectivity=0.0001, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.0001, num boundaries=0, estimated data pages loaded=0.00%)
+   _id_: (indexKey='{"_id": 1}', startup cost=0.150, total cost=4.180, selectivity=0.005, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.005, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Index Scan using a_nested on documents_91000202 collection (actual rows=5 loops=1)
+         Index Cond: ((documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.>) '{ "$" : { "$numberInt" : "1" } }'::documentdb_core.bson) AND (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.<=) '{ "$" : { "$numberDouble" : "Infinity" } }'::documentdb_core.bson))
+         Filter: (document OPERATOR(documentdb_api_catalog.@>) '{ "a" : { "$numberInt" : "1" } }'::documentdb_core.bson)
+(8 rows)
+
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db', '{"find":"extraction","filter":{"a":{"$lt":2}}}');
+                                                                                                                                                                                       QUERY PLAN                                                                                                                                                                                        
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=2 loops=1)
+   namespaceName: btree_registration_db.extraction
+   indexName: a_nested
+   a_nested: (indexKey='BSONHEX1e00000010610001000000106e65737465642e76616c7565000100000000', startup cost=0.150, total cost=4.160, selectivity=0.0001, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.0001, num boundaries=0, estimated data pages loaded=0.00%)
+   _id_: (indexKey='{"_id": 1}', startup cost=0.150, total cost=4.180, selectivity=0.005, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.005, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Index Scan using a_nested on documents_91000202 collection (actual rows=2 loops=1)
+         Index Cond: ((documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.<) '{ "$" : { "$numberInt" : "2" } }'::documentdb_core.bson) AND (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.>=) '{ "$" : { "$numberDouble" : "-Infinity" } }'::documentdb_core.bson))
+         Filter: (document OPERATOR(documentdb_api_catalog.@<) '{ "a" : { "$numberInt" : "2" } }'::documentdb_core.bson)
+(8 rows)
+
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db', '{"find":"extraction","filter":{"a":{"$gt":"alpha"}}}');
+                                                                                                                                                                 QUERY PLAN                                                                                                                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1 loops=1)
+   namespaceName: btree_registration_db.extraction
+   indexName: a_nested
+   a_nested: (indexKey='BSONHEX1e00000010610001000000106e65737465642e76616c7565000100000000', startup cost=0.150, total cost=4.160, selectivity=0.0001, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.0001, num boundaries=0, estimated data pages loaded=0.00%)
+   _id_: (indexKey='{"_id": 1}', startup cost=0.150, total cost=4.180, selectivity=0.005, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.005, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Index Scan using a_nested on documents_91000202 collection (actual rows=1 loops=1)
+         Index Cond: ((documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.>) '{ "$" : "alpha" }'::documentdb_core.bson) AND (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.<) '{ "$" : {  } }'::documentdb_core.bson))
+         Filter: (document OPERATOR(documentdb_api_catalog.@>) '{ "a" : "alpha" }'::documentdb_core.bson)
+(8 rows)
+
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db', '{"find":"extraction","filter":{"a":{"$lte":"zeta"}}}');
+                                                                                                                                                                QUERY PLAN                                                                                                                                                                 
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=2 loops=1)
+   namespaceName: btree_registration_db.extraction
+   indexName: a_nested
+   a_nested: (indexKey='BSONHEX1e00000010610001000000106e65737465642e76616c7565000100000000', startup cost=0.150, total cost=4.160, selectivity=0.0001, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.0001, num boundaries=0, estimated data pages loaded=0.00%)
+   _id_: (indexKey='{"_id": 1}', startup cost=0.150, total cost=4.180, selectivity=0.005, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.005, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Index Scan using a_nested on documents_91000202 collection (actual rows=2 loops=1)
+         Index Cond: ((documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.<=) '{ "$" : "zeta" }'::documentdb_core.bson) AND (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.>=) '{ "$" : "" }'::documentdb_core.bson))
+         Filter: (document OPERATOR(documentdb_api_catalog.@<=) '{ "a" : "zeta" }'::documentdb_core.bson)
+(8 rows)
+
+EXPLAIN (COSTS OFF, ANALYZE ON, SUMMARY OFF, TIMING OFF, BUFFERS OFF)
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db',
+    '{"find":"extraction","filter":{"a":{"$gte":{"$numberDouble":"NaN"}}}}');
+                                                                                                                                                                                       QUERY PLAN                                                                                                                                                                                        
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Custom Scan (DocumentDBApiExplainQueryScan) (actual rows=1 loops=1)
+   namespaceName: btree_registration_db.extraction
+   indexName: a_nested
+   a_nested: (indexKey='BSONHEX1e00000010610001000000106e65737465642e76616c7565000100000000', startup cost=0.150, total cost=4.160, selectivity=0.0001, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.0001, num boundaries=0, estimated data pages loaded=0.00%)
+   _id_: (indexKey='{"_id": 1}', startup cost=0.150, total cost=4.180, selectivity=0.005, correlation=0.000, estimated index pages loaded=50.00%, estimated total index entries=810, boundary selectivity=0.005, num boundaries=0, estimated data pages loaded=0.00%)
+   ->  Index Scan using a_nested on documents_91000202 collection (actual rows=1 loops=1)
+         Index Cond: ((documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.>=) '{ "$" : { "$numberDouble" : "NaN" } }'::documentdb_core.bson) AND (documentdb_btree_catalog.bson_btree_extract_path(document, 'a'::text, NULL::text) OPERATOR(documentdb_core.<=) '{ "$" : { "$numberDouble" : "NaN" } }'::documentdb_core.bson))
+         Filter: (document OPERATOR(documentdb_api_catalog.@>=) '{ "a" : { "$numberDouble" : "NaN" } }'::documentdb_core.bson)
+(8 rows)
+
+RESET enable_bitmapscan;
+-- Sentinel comparisons must continue to span multiple BSON types.
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db',
+    '{"find":"extraction","filter":{"a":{"$gt":{"$minKey":1}}},"projection":{"_id":1}}');
+              document               
+-------------------------------------
+ { "_id" : { "$numberInt" : "1" } }
+ { "_id" : { "$numberInt" : "2" } }
+ { "_id" : { "$numberInt" : "10" } }
+ { "_id" : { "$numberInt" : "11" } }
+ { "_id" : { "$numberInt" : "12" } }
+ { "_id" : { "$numberInt" : "13" } }
+ { "_id" : { "$numberInt" : "14" } }
+ { "_id" : { "$numberInt" : "15" } }
+ { "_id" : { "$numberInt" : "16" } }
+ { "_id" : { "$numberInt" : "17" } }
+ { "_id" : { "$numberInt" : "18" } }
+ { "_id" : { "$numberInt" : "19" } }
+ { "_id" : { "$numberInt" : "20" } }
+ { "_id" : { "$numberInt" : "22" } }
+(14 rows)
+
+SELECT document
+FROM documentdb_api_catalog.bson_aggregation_find(
+    'btree_registration_db',
+    '{"find":"extraction","filter":{"a":{"$lt":{"$maxKey":1}}},"projection":{"_id":1}}');
+              document               
+-------------------------------------
+ { "_id" : { "$numberInt" : "1" } }
+ { "_id" : { "$numberInt" : "2" } }
+ { "_id" : { "$numberInt" : "10" } }
+ { "_id" : { "$numberInt" : "11" } }
+ { "_id" : { "$numberInt" : "12" } }
+ { "_id" : { "$numberInt" : "13" } }
+ { "_id" : { "$numberInt" : "14" } }
+ { "_id" : { "$numberInt" : "15" } }
+ { "_id" : { "$numberInt" : "16" } }
+ { "_id" : { "$numberInt" : "17" } }
+ { "_id" : { "$numberInt" : "18" } }
+ { "_id" : { "$numberInt" : "19" } }
+ { "_id" : { "$numberInt" : "20" } }
+ { "_id" : { "$numberInt" : "21" } }
+(14 rows)
+
+RESET enable_seqscan;
+RESET client_min_messages;
+RESET documentdb.alternate_index_handler_name;
+RESET documentdb_core.enableCollation;
+RESET documentdb.enableCollationWithNonUniqueOrderedIndexes;
+RESET documentdb_core.bsonUseEJson;

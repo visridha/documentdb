@@ -1,0 +1,4 @@
+test: documentdb_btree_stub
+test: documentdb_btree_registration
+test: documentdb_btree_planner
+test: documentdb_btree_find_sort
